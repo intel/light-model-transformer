@@ -1,0 +1,8 @@
+*.pyc
+*.bin
+*.log
+*.pkl
+*.caffemodel
+*.prototxt
+topo.txt
+*.pb
