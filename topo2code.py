@@ -470,7 +470,11 @@ def topo_2_dict(topo_file):
                     in_channel = int(graph_dict[input_key]["out_channel"])
                     if graph_dict[input_key]["op"] == "ExtractImagePatches":
                         in_channel = in_channel * int(graph_dict[input_key]["ksize_h"]) * int(graph_dict[input_key]["ksize_w"])
-                    out_channel += int(in_channel)
+                    if op == "Add":
+                        out_channel = in_channel
+                        break
+                    else:
+                        out_channel += int(in_channel)
             else:
                 input_key = dict_alias_key[graph_dict[key]["input_name"][0]]
                 out_channel = graph_dict[input_key]["out_channel"]
