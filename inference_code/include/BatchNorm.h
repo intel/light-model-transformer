@@ -89,7 +89,7 @@ public:
     net.push_back(*bn_fd);
 
 
-    if (with_type == "relu") {
+    if (with_type == "Relu") {
         printf(" [with relu].\n");
         relu_dst_memory = relu(cpu_engine, bnrm_prim_desc, p_dst_memory, 0.0, 0.0, net);
         
