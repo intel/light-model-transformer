@@ -34,7 +34,7 @@ Light Model Transformer is a light tool that could transform trained tensorflow 
     - `cd inference_code`
     - `vi build.sh` and make sure the path of MKLDNN_ROOT is correct
     - `sh build.sh` (Note: opencv is needed to compile the code, and it will create an executable file named 'test')
-    - `./test -W saved_model/weights.bin -b 1 -l 100` (Type `./test -H` for help)
+    - `./test -W ../saved_model/weights.bin -b 1 -l 100` (Type `./test -H` for help)
 
 ### Integrate generated code to your own project
 
