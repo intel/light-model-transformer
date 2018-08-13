@@ -37,23 +37,18 @@ def exec_cmd(cmd, title, check_output=True):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--mkldnn_path", "-p", default=MKLDNN_PATH, type=str, help="Path of mkl-dnn, default:[%s]" % MKLDNN_PATH)
-    parser.add_argument("--no_test", "-n", action='store_true', help="Don't run mkl-dnn test.")
     args = parser.parse_args()
 
     download_mkldnn = 'git clone https://github.com/intel/mkl-dnn -b %s %s' % (MKLDNN_VERSION, args.mkldnn_path)
     apply_patch = 'python PATCH/mkldnn_patch/apply_patch.py --path=%s' % args.mkldnn_path
-    make_mkldnn = 'mkdir -p %s/build && cd %s/build && cmake .. && make -j' % (args.mkldnn_path, args.mkldnn_path)
-    test_mkldnn = 'cd %s/build && make test -j' % (args.mkldnn_path)
+    install_mkldnn = 'mkdir -p %s/build && cd %s/build && cmake .. && make -j && make install' % (args.mkldnn_path, args.mkldnn_path)
 
-    print('\nInstall start.\n')
     if os.path.exists(args.mkldnn_path):
         print("  Exist path['third_party/mkl-dnn'], jump the step of install mkldnn.")
     else:
         exec_cmd(download_mkldnn, "Cloning 'mkl-dnn' into 'third_party/mkl-dnn'...")
 
-    exec_cmd(apply_patch, "Patching mkl-dnn ...")
-    exec_cmd(make_mkldnn, "Making mkl-dnn ...", False)
-    if not args.no_test:
-        exec_cmd(test_mkldnn, "Testing mkl-dnn ...", False)
+    exec_cmd(apply_patch, "Patch mkl-dnn ...")
+    exec_cmd(install_mkldnn, "Make and Install mkl-dnn ...", False)
 
     print('\nDone.\n')

@@ -6,8 +6,8 @@ Light Model Transformer is a light tool that could transform trained tensorflow 
 
 ### Install Intel mkl-dnn
 - install Intel mkl-dnn via script
-    - `python install.py`
-    - See detail by cmd: `python install.py -h`
+    - `python install_mkldnn.py`
+    - See detail by cmd: `python install_mkldnn.py -h`
 
 ### Convert model
 
