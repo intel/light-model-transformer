@@ -51,4 +51,4 @@ Light Model Transformer is a light tool that could transform trained tensorflow 
 ## Note:
 
 - 'Light' means it is a simple implementation, currently only support CNN networks. And even for CNN, many ops are still not supported.
-- You may also consider [OpenVINO(TM) toolkit](https://software.intel.com/en-us/openvino-toolkit) for inference acceleration.
+- We suggest using [OpenVINO(TM) toolkit](https://software.intel.com/en-us/openvino-toolkit) for inference acceleration, if you could accept close source inference engine.
