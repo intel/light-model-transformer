@@ -13,6 +13,7 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 *******************************************************************************/
+
 #ifndef __FORMAT_H
 #define __FORMAT_H
 #include "mkldnn.hpp"
@@ -150,6 +151,17 @@ std::string GetOutputFormat(engine *engine, pooling_forward::primitive_desc *p_p
 }
 
 std::string GetOutputFormat(engine *engine, extract_image_patches_forward::primitive_desc *p_prim_desc, 
+                            memory::data_type type, memory::dims &dim) {
+    for (int i = 0; i < sizeof(formats) / sizeof(memory::format); ++i) {
+        auto md = memory::desc({dim}, type, formats[i]);
+        auto memory_descriptor = memory::primitive_desc(md, *engine);
+        if (memory::primitive_desc(p_prim_desc->dst_primitive_desc()) == memory_descriptor)
+            return format_names[i];
+    }
+    return "unknown";
+}
+
+std::string GetOutputFormat(engine *engine, resize_bilinear_forward::primitive_desc *p_prim_desc, 
                             memory::data_type type, memory::dims &dim) {
     for (int i = 0; i < sizeof(formats) / sizeof(memory::format); ++i) {
         auto md = memory::desc({dim}, type, formats[i]);

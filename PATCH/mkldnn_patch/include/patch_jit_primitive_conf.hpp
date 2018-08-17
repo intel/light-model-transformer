@@ -13,6 +13,7 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 *******************************************************************************/
+
 #ifndef PATCH_JIT_PRIMITIVE_CONF_HPP
 #define PATCH_JIT_PRIMITIVE_CONF_HPP
 
@@ -59,6 +60,38 @@ struct jit_extract_img_patches_call_s {
     size_t kh_padding_shift;
     size_t kd_padding_shift;
     size_t kw_padding;
+    const float* init_value;
+    float ker_area_h;
+};
+
+/* resize_bilinear */
+struct jit_bilinear_conf_t {
+    int ndims;
+    int mb, c;
+    int id, ih, iw, od, oh, ow;
+    int align_corners;
+    bool is_training;
+    bool is_backward;
+    bool simple_alg;
+    data_type_t ind_dt;
+
+    int c_block, c_tail, nb_c;
+    int ur_c, ur_c_tail;
+    int ur_w;
+    int ur_w_tail;
+    size_t tail[4];
+    data_type_t src_dt;
+    data_type_t dst_dt;
+};
+
+struct jit_bilinear_call_s {
+    const float *src;
+    const float *dst;
+    const void *indices;
+    const float *src_prf;
+    const float *dst_prf;
+    const void *indices_prf;
+    size_t oh;
     const float* init_value;
     float ker_area_h;
 };

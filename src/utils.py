@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #===============================================================================
+
 import sys
 import numpy as np
 import logging
@@ -27,10 +28,7 @@ def get_logger():
 
 
 logger = get_logger()
-
-
 g_weights = []
-
 
 # get_str(b'NHWC') = 'NHWC'
 def decode_string(str):
@@ -68,6 +66,7 @@ def do_multiply(conv_node, weights, multiplier):
                         idx += 1
     return weights
 
+
 # weights is 2 dimaension tensor
 # It is currently called to merge 'Matmul' and 'Mul' (our implementation is not so rigorous)
 def do_multiply2(weights, multiplier):
@@ -87,11 +86,13 @@ def do_multiply2(weights, multiplier):
         print(multiplier.shape)
         exit(-1)
 
+
 def write_to_file(f, str):
     if sys.version_info[0] == 3:
         f.write(str.encode())
     else:
         f.write(str)
+
 
 def dump_fake_input(height, width, channel, topo_file):
     write_to_file(topo_file, "# op origin_name out_channel height width\n")
@@ -121,6 +122,7 @@ def dump_simple_op(node, name, input_name, topo_file):
         input_name, list) else input_name
     write_to_file(topo_file, "%s %s %s\n" % (node.op, name, ipt_name))
 
+
 def dump_relu(node, name, input_name, topo_file):
     write_to_file(topo_file, "# op origin_name input_name alpha beta\n")
     ipt_name = " ".join(input_name) if isinstance(
@@ -128,16 +130,10 @@ def dump_relu(node, name, input_name, topo_file):
 
     try:
         str_alpha = "{}".format(node.alpha)
-        write_to_file(topo_file, "Relu %s %s %s 0\n" % (name, ipt_name, str_alpha))
+        write_to_file(topo_file, "%s %s %s %s 0\n" % (node.op, name, ipt_name, str_alpha))
     except Exception as e:
-        write_to_file(topo_file, "Relu %s %s 0 0\n" % (name, ipt_name))
-    '''
-    if node.alpha is not None:
-        str_alpha = "{}".format(node.alpha)
-        write_to_file(topo_file, "Relu %s %s %s\n" % (name, ipt_name, str_alpha))
-    else:
-        write_to_file(topo_file, "Relu %s %s\n" % (name, ipt_name))
-    '''
+        write_to_file(topo_file, "%s %s %s 0 0\n" % (node.op, name, ipt_name))
+
 
 def dump_fc(node, name, input_name, first_fc, input_shape, fc_weights, have_bias, fc_bias, output_size, topo_file, weights_file, data_format, x_of_nChwxc):
     fc_weights = np.transpose(fc_weights, (1, 0))
@@ -170,9 +166,8 @@ def dump_fc(node, name, input_name, first_fc, input_shape, fc_weights, have_bias
     fc_bias.tofile(weights_file)
     g_weights.append(fc_bias)
 
+
 # Dump convolution weights and bias to file
-
-
 def dump_convolution(node, name, input_name, conv_weights, have_bias, conv_bias, input_shape, output_shape, pad, topo_file, weights_file):
     logger.debug("dump_convolution")
     logger.debug("node name:%s conv_weights_shape: %s" %(node.name, str(conv_weights.shape)))
@@ -201,8 +196,7 @@ def dump_convolution(node, name, input_name, conv_weights, have_bias, conv_bias,
     else:
         pad_l, pad_r, pad_t, pad_b = get_pad_value(node, padding, data_format, ksize_h, ksize_w, stride_h, stride_w, input_shape, output_shape)
 
-
-    if node.op == 'Conv2D':
+    if node.op in ['Conv2D', 'Conv2DBackpropInput']:
         write_to_file(topo_file, 
             "# op origin_name with_bias out_channel pad_l pad_r pad_t pad_b ksize_h ksize_w stride_h stride_w input_name\n")
         write_to_file(topo_file, "%s %s %s " % (node.op, name, have_bias))
@@ -212,7 +206,7 @@ def dump_convolution(node, name, input_name, conv_weights, have_bias, conv_bias,
         write_to_file(topo_file, "%d %d %d %d %d %d %d %d %d %s\n" % (
             out_channel, pad_l, pad_r, pad_t, pad_b, ksize_h, ksize_w, stride_h, stride_w, ipt_name))
 
-        dump_conv_weights(conv_weights, have_bias, conv_bias, weights_file)
+        dump_conv_weights(node.op, conv_weights, have_bias, conv_bias, weights_file)
         logger.debug("pad: %s" % (str(pad)))
 
     elif node.op == 'DepthwiseConv2dNative':
@@ -227,8 +221,12 @@ def dump_convolution(node, name, input_name, conv_weights, have_bias, conv_bias,
             conv_weights, have_bias, conv_bias, weights_file)
         logger.debug("pad: %s" % (str(pad)))
 
-def dump_conv_weights(conv_weights, have_bias, conv_bias, weights_file):
-    conv_weights = np.transpose(conv_weights, (3, 2, 0, 1))
+
+def dump_conv_weights(conv_op, conv_weights, have_bias, conv_bias, weights_file):
+    if conv_op == 'Conv2DBackpropInput': 
+        conv_weights = np.transpose(conv_weights, (2, 3, 0, 1))
+    else:
+        conv_weights = np.transpose(conv_weights, (3, 2, 0, 1))
     conv_weights.tofile(weights_file)
     g_weights.append(conv_weights)
     if have_bias:
@@ -253,8 +251,14 @@ def dump_depthwiseconv_weights(conv_weights, have_bias, conv_bias, weights_file)
         conv_bias.tofile(weights_file)
         g_weights.append(conv_bias)
 
+
 # Refer to tensorflow.org/api_guides/python/nn#Convolution
 def get_pad_value(node, padding, data_format, ksize_h, ksize_w, stride_h, stride_w, input_shape, output_shape):
+    if node.op == "Conv2DBackpropInput": 
+        tmp_shape = input_shape
+        input_shape = output_shape
+        output_shape = input_shape
+
     if data_format == 'NHWC':
         in_height = int(input_shape[1])
         in_width = int(input_shape[2])
@@ -330,10 +334,12 @@ def dump_pool(node, name, input_name, input_shape, output_shape, topo_file):
         input_name, list) else input_name
     write_to_file(topo_file, "%s %s %d %d %d %d %d %d %d %d %s\n" % (node.op, name, pad_l, pad_r, pad_t, pad_b, ksize_h, ksize_w, stride_h, stride_w, ipt_name))
 
+
 def dump_add(node, topo_file, input_list, idx):
     write_to_file(topo_file, "# op origin_name input_name\n")
     write_to_file(topo_file, "Add %s %s %s\n" %
                     ('add' + str(idx), input_list[0], input_list[1]))
+
 
 def dump_batchnorm(node, name, input_name, mean, variance, e, alpha, beta, topo_file, weights_file):
     write_to_file(topo_file, "# op origin_name epsilon input_name\n")
@@ -349,6 +355,7 @@ def dump_batchnorm(node, name, input_name, mean, variance, e, alpha, beta, topo_
     g_weights.append(1.0)
     g_weights.append(alpha)
     g_weights.append(beta)
+
 
 def dump_extract_image_patches(node, name, input_name, input_shape, output_shape, topo_file):
     ksize = node.attr.get('ksizes').list.i
@@ -369,6 +376,15 @@ def dump_extract_image_patches(node, name, input_name, input_shape, output_shape
     ipt_name = " ".join(input_name) if isinstance(
         input_name, list) else input_name
     write_to_file(topo_file, "%s %s %d %d %d %d %d %d %d %d %d %d %s\n" % (node.op, name, pad_l, pad_r, pad_t, pad_b, ksize_h, ksize_w, stride_h, stride_w, rate_h, rate_w, ipt_name))
+
+
+def dump_resize_bilinear(node, name, out_h, out_w, align_corners, input_name, topo_file):
+    write_to_file(topo_file, 
+        "# op origin_name out_height out_width align_corners input_name\n")
+
+    ipt_name = " ".join(input_name) if isinstance(
+        input_name, list) else input_name
+    write_to_file(topo_file, "%s %s %s %s %s %s\n" % (node.op, name, out_h, out_w, align_corners, ipt_name))
 
 
 if __name__ == "__main__":

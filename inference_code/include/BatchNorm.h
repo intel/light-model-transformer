@@ -13,6 +13,7 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 *******************************************************************************/
+
 #ifndef __BATCHNORM_H
 #define __BATCHNORM_H
 #include <iostream>
@@ -28,7 +29,7 @@ public:
   BatchNorm(const std::string &_name, 
           int _in_channels, int _in_h, int _in_w, 
           float epsilon,
-          std::string _with_type = "relu",
+          std::string _with_type = "none",
           const std::string &_quantize_type = "fp32",
           float _scale_out = 1.0): // int8 or fp32
           name(_name), with_type(_with_type), quantize_type(_quantize_type), scale_out(_scale_out) {
@@ -91,7 +92,12 @@ public:
 
     if (with_type == "Relu") {
         printf(" [with relu].\n");
-        relu_dst_memory = relu(cpu_engine, bnrm_prim_desc, p_dst_memory, 0.0, 0.0, net);
+        relu_dst_memory = relu(cpu_engine, bnrm_prim_desc, p_dst_memory, 0.0, 0.0, net, with_type);
+        
+        return relu_dst_memory;
+    } else if (with_type == "Relu6") {
+        printf(" [with relu6].\n");
+        relu_dst_memory = relu(cpu_engine, bnrm_prim_desc, p_dst_memory, 6.0, 0.0, net, with_type);
         
         return relu_dst_memory;
     } else 

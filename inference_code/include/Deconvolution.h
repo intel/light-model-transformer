@@ -13,6 +13,7 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 *******************************************************************************/
+
 #ifndef __DECONVOLUTION_H
 #define __DECONVOLUTION_H
 #include <iostream>
@@ -60,8 +61,8 @@ public:
     }
     this->stride_h = stride_h;
     this->stride_w = stride_w;
-    this->out_h = (in_h + this->t_pad + this->b_pad - kernel_h) / stride_h + 1;
-    this->out_w = (in_w + this->l_pad + this->r_pad - kernel_w) / stride_w + 1;
+    this->out_h = (in_h - 1) * stride_h + kernel_h - this->t_pad - this->b_pad;
+    this->out_w = (in_w - 1) * stride_w + kernel_w - this->l_pad - this->r_pad;
     this->fmt = "";
     
 
@@ -199,23 +200,12 @@ public:
 
     if ( with_type == "Relu6" ) { 
 		printf(" - [with Relu6].\n");
-#if 0
-        auto _desc = eltwise_forward::desc(prop_kind::forward,
-            algorithm::eltwise_Relu6,
-            p_prim_desc->dst_primitive_desc().desc(),
-            alpha, beta);
-        auto _prim_desc = eltwise_forward::primitive_desc(_desc, *cpu_engine);
-
-        this->_dst_memory = new memory(_prim_desc.dst_primitive_desc());
-        this->_fd = new eltwise_forward(_prim_desc, *p_dst_memory, *_dst_memory);
-
-        net.push_back(*_fd);
+        _dst_memory = relu(cpu_engine, p_prim_desc, p_dst_memory, 6.0, beta, net, with_type);
 
         return _dst_memory;
-#endif
     } else if ( with_type == "Relu" ) { 
 		printf(" - [with Relu].\n");
-        _dst_memory = relu(cpu_engine, p_prim_desc, p_dst_memory, alpha, beta, net);
+        _dst_memory = relu(cpu_engine, p_prim_desc, p_dst_memory, alpha, beta, net, with_type);
 
         return _dst_memory;
     } else {

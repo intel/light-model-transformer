@@ -13,9 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #===============================================================================
+
 # -*- coding: utf-8 -*-
 import sys
-import cv2
 import os
 import struct
 import argparse
@@ -42,7 +42,7 @@ def get_delete_vars_str(graph_dict):
     delete_vars_str = ""
     for key in range(len(graph_dict)):
         if key == 0: continue
-        if graph_dict[key]["op"] in ["Conv2D", "DepthwiseConv2dNative"]:
+        if graph_dict[key]["op"] in ["Conv2D", "DepthwiseConv2dNative", "Conv2DBackpropInput"]:
             alias_name = graph_dict[key]["alias_name"]
             delete_vars_str += "{0}delete[] {1}_w;\n".format(" "*8, alias_name)
             delete_vars_str += "{0}delete[] {1}_b;\n".format(" "*8, alias_name)
@@ -115,8 +115,15 @@ def get_init_net_str(graph_dict):
 
             input_len = len(graph_dict[key]["input_name"])
             for i in range(input_len):
-                _str += "{0}bm_fmts_{1}.push_back({2}->getFormat());\n".format(" "*8, _index, graph_dict[key]["input_name"][i])
-                _str += "{0}bottoms_{1}.push_back(*{2}_out);\n".format(" "*8, _index, graph_dict[key]["input_name"][i])
+                input_name = graph_dict[key]["input_name"][i]
+                if input_name == "Placeholder": 
+                    _format_str = "\"nchw\""
+                    _input_str = "*src_memory"
+                else: 
+                    _format_str = "{0}->getFormat()".format(input_name)
+                    _input_str = "*{0}_out".format(input_name)
+                _str += "{0}bm_fmts_{1}.push_back({2});\n".format(" "*8, _index, _format_str)
+                _str += "{0}bottoms_{1}.push_back({2});\n".format(" "*8, _index, _input_str)
             _str += "{0}{1}_out = {1}->Init(batch_size, &cpu_engine, bm_fmts_{2}, bottoms_{2}, net);\n".format(" "*8, alias_name, _index)
 
         else:
@@ -130,7 +137,7 @@ def get_init_net_str(graph_dict):
                 input_str = "*{0}_out".format(graph_dict[key]["input_name"][0])
 
             _str += "{0}{1}_out = {1}->Init(batch_size, &cpu_engine, {2}, net".format(" "*8, alias_name, input_str)
-            if op in ["Conv2D", "DepthwiseConv2dNative", "MatMul"]:
+            if op in ["Conv2D", "DepthwiseConv2dNative", "Conv2DBackpropInput", "MatMul"]:
                 _str += ", {0}_w, {0}_b".format(alias_name)
             elif op == "BatchNorm":
                 _str += ", {0}_weights, {0}_mean, {0}_variance, {1}->getFormat()".format(alias_name, graph_dict[key]["input_name"][0])
@@ -147,15 +154,15 @@ def get_read_vars_str(graph_dict):
 
         op = graph_dict[key]["op"]
         alias_name = graph_dict[key]["alias_name"]
-        if op not in ["Conv2D", "DepthwiseConv2dNative", "MatMul", "BatchNorm"]: continue
+        if op not in ["Conv2D", "DepthwiseConv2dNative", "Conv2DBackpropInput", "MatMul", "BatchNorm"]: continue
 
         _str += "\n        // origin_layer: {0}\n".format(graph_dict[key]["origin_name"])
-        if op in ["Conv2D", "DepthwiseConv2dNative"]:
+        if op in ["Conv2D", "DepthwiseConv2dNative", "Conv2DBackpropInput"]:
             _str += "{0}fread({1}_w, sizeof(float),\n".format(" "*8, alias_name)
             _str += "{0}{1}->getKernelHeight()".format(" "*14, alias_name)
             _str += " * {0}->getKernelWidth()".format(alias_name)
             _str += " * {0}->getOutputChannels()".format(alias_name)
-            if op == "Conv2D":
+            if op in ["Conv2D", "Conv2DBackpropInput"]:
                 _str += " * {0}->getInputChannels()".format(alias_name)
             _str += ", fp);\n"
 
@@ -184,8 +191,10 @@ def get_create_vars_str(graph_dict):
         op = graph_dict[key]["op"]
         alias_name = graph_dict[key]["alias_name"]
         out_channel = graph_dict[key]["out_channel"]
+        if op == "DepthwiseConv2dNative":
+            out_channel = out_channel * graph_dict[key]["group"]
         
-        if op in ["Conv2D", "DepthwiseConv2dNative"]:
+        if op in ["Conv2D", "DepthwiseConv2dNative", "Conv2DBackpropInput"]:
             ksize_h = graph_dict[key]["ksize_h"]
             ksize_w = graph_dict[key]["ksize_w"]
             in_channel = graph_dict[key]["in_channel"]
@@ -210,52 +219,52 @@ def get_define_vars_str(graph_dict):
 
         op = graph_dict[key]["op"]
         alias_name = graph_dict[key]["alias_name"]
-        if op in ["Conv2D", "DepthwiseConv2dNative", "MatMul"]:
+        if op in ["Conv2D", "DepthwiseConv2dNative", "Conv2DBackpropInput", "MatMul"]:
             define_vars_str += "    static float *{0}_w, *{0}_b;\n".format(alias_name)
         elif op == "BatchNorm":
             define_vars_str += "    static float *{0}_weights, *{0}_mean, *{0}_variance;\n" .format(alias_name)
 
     return define_vars_str
 
+def _get_c_h_w_q(input_name):
+    if input_name == "Placeholder":
+        return "input_channel", "input_height", "input_width", "\"fp32\""
+
+    return "{0}->getOutputChannels()".format(input_name), \
+            "{0}->getOutputHeight()".format(input_name), \
+            "{0}->getOutputWidth()".format(input_name), \
+            "{0}->getQuantizeType()".format(input_name)
+        
 
 def get_create_net_str(graph_dict, quantize):
     _str = ""
     for key in range(len(graph_dict)):
         if key == 0: continue
 
-        if graph_dict[key]["input_name"][0] == "Placeholder":
-            channel, height, width, quantize_type = \
-                                "input_channel", \
-                                "input_height", \
-                                "input_width", \
-                                "\"fp32\""
-        else:
-            input_name = graph_dict[key]["input_name"][0]
-            channel, height, width, quantize_type = \
-                                "{0}->getOutputChannels()".format(input_name), \
-                                "{0}->getOutputHeight()".format(input_name), \
-                                "{0}->getOutputWidth()".format(input_name), \
-                                "{0}->getQuantizeType()".format(input_name)
-            
+        channel, height, width, quantize_type = _get_c_h_w_q(graph_dict[key]["input_name"][0])
+
         op = graph_dict[key]["op"]
         alias_name = graph_dict[key]["alias_name"]
         out_channel = graph_dict[key]["out_channel"]
 
-        if op in ["Conv2D", "DepthwiseConv2dNative", "AvgPool", "MaxPool", "ExtractImagePatches"]:
+        if op in ["Conv2D", "DepthwiseConv2dNative", "Conv2DBackpropInput", "AvgPool", "MaxPool", "ExtractImagePatches"]:
             ksize_h, ksize_w = graph_dict[key]["ksize_h"], graph_dict[key]["ksize_w"]
             pad_l, pad_r = graph_dict[key]["pad_l"], graph_dict[key]["pad_r"]
             pad_t, pad_b = graph_dict[key]["pad_t"], graph_dict[key]["pad_b"]
             stride_h, stride_w = graph_dict[key]["stride_h"], graph_dict[key]["stride_w"]
 
-        if op in ["Conv2D", "DepthwiseConv2dNative", "Add", "MatMul", "BatchNorm"]:
+        if op in ["Conv2D", "DepthwiseConv2dNative", "Conv2DBackpropInput", "Add", "MatMul", "BatchNorm"]:
             with_type = graph_dict[key]["with_type"]
             if op in ["Conv2D", "DepthwiseConv2dNative", "MatMul"]:
                 alpha, beta = graph_dict[key]["alpha"], graph_dict[key]["beta"]
 
         # Combine string
         _str += "\n        // origin_layer: {0}\n".format(graph_dict[key]["origin_name"])
-        if op in ["Conv2D", "DepthwiseConv2dNative"]:
-            _str += "{0}{1} = new Convolution(\"{1}\", {2},\n".format(" "*8, alias_name, out_channel)
+        if op in ["Conv2D", "DepthwiseConv2dNative", "Conv2DBackpropInput"]:
+            if op == "Conv2DBackpropInput":
+                _str += "{0}{1} = new Deconvolution(\"{1}\", {2},\n".format(" "*8, alias_name, out_channel)
+            else:
+                _str += "{0}{1} = new Convolution(\"{1}\", {2},\n".format(" "*8, alias_name, out_channel)
             _str += "{0}{1}, {2}, {3},\n".format(" "*24, channel, height, width)
             _str += "{0}{1}, {2}, {3}, {4}, {5}, {6}, {7}, {8},\n".format( \
                                     " "*24, ksize_h, ksize_w, \
@@ -302,7 +311,7 @@ def get_create_net_str(graph_dict, quantize):
             else:
                 _str += "{0}{1}, {2}, {3},\n".format(" "*24, channel, height, width)
             _str += "{0}\"{1}\", {2}, {3},\n".format(" "*24, with_type, alpha, beta)
-            _str += "{0}{1}, {2}->getScaleOut());\n".format(" "*24, quantize_type, input_name)
+            _str += "{0}{1}, {2}->getScaleOut());\n".format(" "*24, quantize_type, graph_dict[key]["input_name"][0])
 
         elif op == "ConcatV2":
             concat_index = graph_dict[key]["alias_name"].split("ConcatV2_")[1]
@@ -313,15 +322,15 @@ def get_create_net_str(graph_dict, quantize):
 
             input_len = len(graph_dict[key]["input_name"])
             for i in range(input_len):
-                input_name = graph_dict[key]["input_name"][i]
-                _str += "{0}quantizes_{1}.push_back({2}->getQuantizeType()); ".format(" "*8, concat_index, input_name)
+                channel, height, width, quantize_type = _get_c_h_w_q(graph_dict[key]["input_name"][i])
+                _str += "{0}quantizes_{1}.push_back({2}); ".format(" "*8, concat_index, quantize_type)
                 if quantize == "fp32":
                     _str += "scales_{0}.push_back(1.0);\n".format(concat_index)
                 else:
                     _str += "scales_{0}.push_back({1});\n".format(concat_index, graph_dict[key]["scale"][i])
-                _str += "{0}dims_{1}[0] = {2}->getOutputChannels();".format(" "*8, concat_index, input_name)
-                _str += " dims_{0}[1] = {1}->getOutputHeight();".format(concat_index, input_name)
-                _str += " dims_{0}[2] = {1}->getOutputWidth();\n".format(concat_index, input_name)
+                _str += "{0}dims_{1}[0] = {2};".format(" "*8, concat_index, channel)
+                _str += " dims_{0}[1] = {1};".format(concat_index, height)
+                _str += " dims_{0}[2] = {1};\n".format(concat_index, width)
                 _str += "{0}in_dims_{1}.push_back(dims_{2});\n".format(" "*8, concat_index, concat_index)
 
             _str += "{0}{1} = new Concat(\"{1}\", \n".format(" "*8, alias_name)
@@ -333,7 +342,7 @@ def get_create_net_str(graph_dict, quantize):
             _str += "{0}{1}, {2}, {3}, {4}, \"{5}\");\n".format(" "*24, channel, height, width, epsilon, with_type)
 
         elif op == "ExtractImagePatches":
-            rate_h, rate_w = graph_dict[key]["rate_h"], graph_dict[key]["out_weight"]
+            rate_h, rate_w = graph_dict[key]["rate_h"], graph_dict[key]["rate_w"]
             _str += "{0}{1} = new ExtractImagePatches(\"{1}\", \n".format(" "*8, alias_name)
             _str += "{0}{1}, {2}, {3},\n".format(" "*24, channel, height, width)
             _str += "{0}{1}, {2}, {3}, {4}, {5}, {6}, {7}, {8},\n".format( \
@@ -344,10 +353,10 @@ def get_create_net_str(graph_dict, quantize):
             _str += "{0}{1});\n".format(" "*24, quantize_type)
 
         elif op == "ResizeBilinear":
-            out_h, out_w = graph_dict[key]["out_height"], graph_dict[key]["out_width"]
+            out_h, out_w, align_corners = graph_dict[key]["out_height"], graph_dict[key]["out_width"], graph_dict[key]["align_corners"]
             _str += "{0}{1} = new ResizeBilinear(\"{1}\", \n".format(" "*8, alias_name)
             _str += "{0}{1}, {2}, {3},\n".format(" "*24, channel, height, width)
-            _str += "{0}{1}, {2},\n".format(" "*24, out_h, out_w)
+            _str += "{0}{1}, {2}, \"{3}\",\n".format(" "*24, out_h, out_w, align_corners)
             _str += "{0}{1});\n".format(" "*24, quantize_type)
             
     return _str
@@ -429,7 +438,7 @@ def topo_2_dict(topo_file):
             type_ele = type_list[last_index]
             graph_dict[key][type_ele] = node_list[last_index:]
 
-            if graph_dict[key]["op"] in ["Conv2D", "DepthwiseConv2dNative", "Add", "MatMul", "BatchNorm"]:
+            if graph_dict[key]["op"] in ["Conv2D", "DepthwiseConv2dNative", "Conv2DBackpropInput", "Add", "MatMul", "BatchNorm"]:
                 graph_dict[key]["with_type"] = "none"
                 graph_dict[key]["alpha"] = "0"
                 graph_dict[key]["beta"] = "0"
@@ -457,10 +466,10 @@ def topo_2_dict(topo_file):
         if graph_dict[key]["op"] == "Placeholder": continue
 
         out_channel = 0
-        if op in ["Conv2D", "DepthwiseConv2dNative", "MatMul"]:
+        if op in ["Conv2D", "DepthwiseConv2dNative", "Conv2DBackpropInput", "MatMul"]:
             out_channel = graph_dict[key]["out_channel"]
             if op == "DepthwiseConv2dNative":
-                out_channel = int(out_channel) / int(graph_dict[key]["group"])
+                graph_dict[key]["out_channel"] = int(out_channel) / int(graph_dict[key]["group"])
         else:
             if op in ["Add", "ConcatV2"]:
                 input_len = len(graph_dict[key]["input_name"])
@@ -470,7 +479,7 @@ def topo_2_dict(topo_file):
                     in_channel = int(graph_dict[input_key]["out_channel"])
                     if graph_dict[input_key]["op"] == "ExtractImagePatches":
                         in_channel = in_channel * int(graph_dict[input_key]["ksize_h"]) * int(graph_dict[input_key]["ksize_w"])
-                    if op == "Add":
+                    if op == "Add": 
                         out_channel = in_channel
                         break
                     else:
@@ -484,11 +493,13 @@ def topo_2_dict(topo_file):
     # Get input_channels
     for key in graph_dict.keys():
         op = graph_dict[key]["op"]
-        if op in ["Conv2D", "DepthwiseConv2dNative"]:
+        if op in ["Conv2D", "DepthwiseConv2dNative", "Conv2DBackpropInput"]:
             input_key = dict_alias_key[graph_dict[key]["input_name"][0]]
             in_channel = int(graph_dict[input_key]["out_channel"])
             if graph_dict[input_key]["op"] == "ExtractImagePatches":
                 in_channel = in_channel * int(graph_dict[input_key]["ksize_h"]) * int(graph_dict[input_key]["ksize_w"])
+            elif graph_dict[input_key]["op"] == "DepthwiseConv2dNative":
+                in_channel = in_channel * int(graph_dict[input_key]["group"])
 
             graph_dict[key]["in_channel"] = in_channel
 
@@ -542,7 +553,6 @@ if __name__ == "__main__":
 
     with open("cfg/Model.cfg", "r") as f:
         data = f.read()
-
     data = Template(data).safe_substitute( \
             height = graph_dict[0]["height"], \
             width = graph_dict[0]["width"], \

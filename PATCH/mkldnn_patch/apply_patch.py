@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #===============================================================================
+
 import os
 import argparse
 
@@ -33,7 +34,7 @@ def exe_move(mkldnn_path, move_info):
             os.system("cp %s/%s/%s %s" % (os.path.dirname(__file__), from_dir, elem, target_dir))
 
 
-def exe_modify(mkldnn_path, move_info):
+def exe_modify(mkldnn_path, modify_info):
     print("  Modifing ...")
     for m_file in modify_info.keys():
         target_file = '%s/%s' % (mkldnn_path, m_file)
@@ -43,7 +44,7 @@ def exe_modify(mkldnn_path, move_info):
         if not os.path.exists(origin_file): os.system("cp %s %s" % (target_file, origin_file))
 
         m_entrance, m_exit, m_content = [], [], []
-        for index in range(len(modify_info[m_file])):
+        for index in xrange(len(modify_info[m_file])):
             m_entrance.append(modify_info[m_file][index][0])
             m_exit.append(modify_info[m_file][index][1])
             m_content.append(modify_info[m_file][index][2:])
@@ -63,7 +64,7 @@ def exe_modify(mkldnn_path, move_info):
 
             # Is ENTRANCE or not
             if modify_num == -1:
-                for index in range(len(m_entrance)):
+                for index in xrange(len(m_entrance)):
                     if m_entrance[index] in line:
                         modify_num = index
                 # continue no matter is ENTRANCE or not
@@ -72,37 +73,45 @@ def exe_modify(mkldnn_path, move_info):
             # Got entrance, ready to modify
             # Save space num
             space_num = 0
-            for index in range(len(line)):
+            for index in xrange(len(line)):
                 if line[index] == " ": space_num += 1
                 else: break
 
             # Save the index of first line of the last comment-out code before EXIT.
-            if line.strip()[:2] in ["//", "/*"]:
+            if line.strip()[:2] in ["//", "/*", "# "]:
                 if comment_out_code_index == -1:
                     comment_out_code_index = line_index
                 continue
 
+            # Confront EXIT, need to modify
             if m_exit[modify_num] == "None":
                 if m_entrance[modify_num] not in line:
                     ready_to_modify = True
             else:
-                for index in range(len(m_exit)):
+                for index in xrange(len(m_exit)):
                     if m_exit[index] in line:
                         ready_to_modify = True
 
             if ready_to_modify:
+                # Get the index of line need to modify
                 modify_line = line_index
                 if comment_out_code_index != -1: modify_line = comment_out_code_index
 
+                # Make the new line
                 tmp_content = ''
                 for elem in m_content[modify_num]:
                     if space_num != 0: tmp_content += " "*space_num
                     tmp_content += "{0}\n".format(elem)
                 tmp_content += "\n%s" % content[modify_line]
+
+                # Modify
                 content[modify_line] = tmp_content
+
+                # Clean
                 ready_to_modify = False
                 modify_num = -1
             else:
+                # Normal line(not comment-out code) between ENTRANCE and EXIT
                 comment_out_code_index = -1
         
         final_content = ""
@@ -115,8 +124,8 @@ def exe_modify(mkldnn_path, move_info):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--path", default="/home/xuesong/recent_work/mkl-dnn",
-                        type=str, help="mkl-dnn path")
+    parser.add_argument("--patch", default="PATCH.CFG", type=str, help="patch configure file")
+    parser.add_argument("--path", default="/home/xuesong/recent_work/mkl-dnn", type=str, help="mkl-dnn path")
     args = parser.parse_args()
 
     mkldnn_path = args.path
@@ -124,7 +133,7 @@ if __name__ == '__main__':
     check_path(mkldnn_path)
 
     content = ""
-    with open("%s/PATCH.CFG" % os.path.dirname(__file__), "r") as f:
+    with open("%s/%s" % (os.path.dirname(__file__), args.patch), "r") as f:
         content = f.read()
 
     move = False
@@ -134,7 +143,7 @@ if __name__ == '__main__':
     modify_file = ""
     modify_entrance, modify_exit = "", ""
     modify_num = -1
-    modify_info = {} # { modify_file: {type: [entrace, exit, content1, content2, ...]} }
+    modify_info = {} # { modify_file: [entrace, exit, content1, content2, ...] }
 
     for line in content.split("\n"):
         line = line.strip()
@@ -170,7 +179,6 @@ if __name__ == '__main__':
                 modify_num += 1
                 continue
 
-            
             modify_line = line.strip()
             modify_info[modify_file][modify_num].append(modify_line)
 

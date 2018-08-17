@@ -13,6 +13,7 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 *******************************************************************************/
+
 #ifndef __CONCAT_H
 #define __CONCAT_H
 #include <iostream>
@@ -179,7 +180,14 @@ public:
             srcs_pd.push_back(mpd);
         }
 
-        auto concat_desc = memory::desc({concat_dst_tz}, top_dt, fmt[end_index-1]);
+        int min_index, min_fmt_id = 100;
+        for ( int i = 0; i < end_index; i ++ ) {
+            if (fmt[i] < min_fmt_id) {
+                min_fmt_id = fmt[i];
+                min_index = i;
+            }
+        }
+        auto concat_desc = memory::desc({concat_dst_tz}, top_dt, fmt[min_index]);
         // dim 一定要和合并的维度序号一致
         this->p_prim_desc = new concat::primitive_desc(concat_desc, concat_dim, srcs_pd); // p_prim_desc
         if (!p_dst_memory)

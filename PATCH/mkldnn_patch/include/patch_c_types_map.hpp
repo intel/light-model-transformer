@@ -13,6 +13,7 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 *******************************************************************************/
+
 #ifndef PATCH_MKLDNN_TYPES_MAP_HPP
 #define PATCH_MKLDNN_TYPES_MAP_HPP
 
@@ -33,34 +34,16 @@ namespace impl {
 using primitive_kind_t = mkldnn_primitive_kind_t;
 namespace primitive_kind {
     const primitive_kind_t extract_image_patches = mkldnn_extract_image_patches;
+    const primitive_kind_t resize_bilinear = mkldnn_resize_bilinear;
 }
 
 namespace query {
     const mkldnn_query_t extract_image_patches_d = mkldnn_query_extract_image_patches_d;
+    const mkldnn_query_t resize_bilinear_d = mkldnn_query_resize_bilinear_d;
 }
 
 using extract_image_patches_desc_t = mkldnn_extract_image_patches_desc_t;
-
-#if 0
-struct patch_op_desc_t {
-    union {
-        primitive_kind_t patch_kind;
-        extract_image_patches_desc_t mkldnn_extract_image_patches;
-    };
-
-    patch_op_desc_t(const primitive_kind_t &_): patch_kind(_) {}
-#   define PATCH_DECL_CTOR_AND_CONVERTERS(c_type, name) \
-    patch_op_desc_t(const c_type &_): name(_) {} \
-    static patch_op_desc_t *convert_from_c(c_type *_) \
-    { return reinterpret_cast<patch_op_desc_t*>(_); } \
-    static const patch_op_desc_t *convert_from_c(const c_type *_) \
-    { return reinterpret_cast<const patch_op_desc_t*>(_); }
-
-
-    PATCH_DECL_CTOR_AND_CONVERTERS(extract_image_patches_desc_t, mkldnn_extract_image_patches);
-#   undef PATCH_DECL_CTOR_AND_CONVERTERS
-};
-#endif
+using resize_bilinear_desc_t = mkldnn_resize_bilinear_desc_t;
 
 }
 }

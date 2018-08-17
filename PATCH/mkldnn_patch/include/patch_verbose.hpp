@@ -13,6 +13,7 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 *******************************************************************************/
+
 #ifndef PATCH_VERBOSE_HPP
 #define PATCH_VERBOSE_HPP
 
@@ -36,6 +37,18 @@ namespace impl {
     char dat_str[MKLDNN_VERBOSE_PRB_LEN] = {'\0'}; MAYBE_UNUSED(dat_str);
 
 template <typename pd_t> static void init_info_extract_img_patches(pd_t *s, char *buffer) {
+    PATCH_DECL_DAT_AUX_PRB_STRS();
+
+    auto fmt_data = (s->desc()->prop_kind == prop_kind::backward_data
+            ? s->diff_src_pd() : s->src_pd())->desc()->format;
+    auto fmt_ws = s->workspace_pd()
+        ? s->workspace_pd()->desc()->format : memory_format::undef;
+    snprintf(dat_str, PATCH_MKLDNN_VERBOSE_DAT_LEN, "fdata:%s fws:%s",
+            mkldnn_fmt2str(fmt_data), mkldnn_fmt2str(fmt_ws));
+
+}
+
+template <typename pd_t> static void init_info_bilinear(pd_t *s, char *buffer) {
     PATCH_DECL_DAT_AUX_PRB_STRS();
 
     auto fmt_data = (s->desc()->prop_kind == prop_kind::backward_data

@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #===============================================================================
+
 import sys
 import argparse
 if sys.version_info[0] == 3:
@@ -107,6 +108,32 @@ class ConvNode(Node):
             self.bias_weights = bias
             self.have_bias = True
 
+class DeConvNode(Node):
+    def __init__(self, node):
+        super(DeConvNode, self).__init__(node)
+        self.data_format = "NHWC"
+        self.have_bias = False
+        self.conv_weights = None
+        self.bias_weights = None
+        self.pad = [-1, -1, -1, -1]
+        self.output_shape = []
+
+    def mul(self, multiplier):
+        if len(multiplier.shape) != 1:
+            logger.warning("Cannot merge mul node to {}, multiplier.shape={}".format(self.name, multiplier.shape))
+            return False
+        self.conv_weights = do_multiply(self, self.conv_weights, multiplier)
+        return True
+
+    def add_bias(self, bias):
+        # TODO: check the bias
+        if self.have_bias:
+            for i in range(0, bias.shape[0]):
+                self.bias_weights[i] += bias[i]
+        else:
+            self.bias_weights = bias
+            self.have_bias = True
+
 class FcNode(Node):
     def __init__(self, node):
         super(FcNode, self).__init__(node)
@@ -139,6 +166,14 @@ class PoolNode(Node):
 class ExtractImagePatchesNode(Node):
     def __init__(self, node):
         super(ExtractImagePatchesNode, self).__init__(node)
+
+
+class ResizeBilinearNode(Node):
+    def __init__(self, node):
+        super(ResizeBilinearNode, self).__init__(node)
+        self.out_height = 0
+        self.out_width = 0
+        self.align_corners = ""
 
 
 class AddNode(Node):
@@ -196,6 +231,7 @@ cls_table = {
     "FusedBatchNorm": BatchNormNode,
     "ReluNode": ReluNode,
     "ExtractImagePatches": ExtractImagePatchesNode,
+    "Conv2DBackpropInput": DeConvNode,
 }
 
 
@@ -284,7 +320,7 @@ class Model(object):
                     _node.attr = node.attr
 
                 # Check data format
-                elif node.op in ("Conv2D", "DepthwiseConv2dNative"):
+                elif node.op in ("Conv2D", "DepthwiseConv2dNative", "Conv2DBackpropInput"):
                     _format = node.attr.get('data_format').s
                     if _format:
                         _node.data_format = decode_string(_format)
@@ -350,7 +386,7 @@ class Model(object):
         print("To calculate shape and weights ...")
         for n in depends:
             n.output_shape = self.get_tensor_shape(n.name)
-            if n.op in ("Conv2D", "DepthwiseConv2dNative"):
+            if n.op in ("Conv2D", "DepthwiseConv2dNative", "Conv2DBackpropInput"):
                 n.conv_weights = self.get_weights(n)
                 data_format = n.data_format
             elif n.op == "MatMul":
@@ -374,7 +410,11 @@ class Model(object):
                     n.kernel_h, n.kernel_w = _shape[1], _shape[2]
                 else:
                     n.kernel_h, n.kernel_w = _shape[2], _shape[3]
-                
+            elif n.op == "ResizeBilinear":
+                _shape = self.get_weights(n)
+                n.out_height = _shape[0]
+                n.out_width = _shape[1]
+                n.align_corners = str(n._node.attr["align_corners"].b)
                     
 
         # Detect 'Merge', 'Switch' nodes, remove it if possible
@@ -525,7 +565,7 @@ class Model(object):
             # Erase the pad node only when the following node is 'Conv2D'
             node_before = inputs[0]
             node_after = _node.output_nodes[0]
-            if node_after.op != "Conv2D":
+            if node_after.op not in ["Conv2D", "Conv2DBackpropInput"]:
                 logger.info("Pad({}) is followed by {}({})".format(_node.name, node_after.op, node_after.name))
                 continue
 
@@ -705,7 +745,7 @@ class Model(object):
 
                 # The only input is Convolution
                 if len(nonconst_inputs) == 1 and \
-                    (nonconst_inputs[0].op in ("Conv2D", "DepthwiseConv2dNative")):
+                    (nonconst_inputs[0].op in ("Conv2D", "DepthwiseConv2dNative", "Conv2DBackpropInput")):
                     pre_node = nonconst_inputs[0]
                     _mean = n.mean
                     _variance = n.variance
@@ -754,7 +794,7 @@ class Model(object):
 
                 # input node is Conv2D/Matmul
                 if len(const_inputs) == 1 and len(nonconst_inputs) == 1 and \
-                    (nonconst_inputs[0].op in ("MatMul", "Conv2D", "DepthwiseConv2dNative")):
+                    (nonconst_inputs[0].op in ("MatMul", "Conv2D", "DepthwiseConv2dNative", "Conv2DBackpropInput")):
 
                     pre_node = nonconst_inputs[0]
                     merged = None
@@ -857,9 +897,9 @@ class Model(object):
         inputs = node.input
         for ip in inputs:
             ipt = self.name_node_dict.get(ip)
-            if ipt.is_const:
+            if ipt.is_const and ipt.op in ["Identity", "Const"]:
                 return self.consts.get(ip)
-    
+
 
     # Get non-const input for a node
     def get_nonconst_input(self, node):
@@ -906,7 +946,7 @@ class Model(object):
         idx = 0
         while idx < len(work_queue):
             cur_node = work_queue[idx]
-            if cur_node.op in ("Conv2D", "DepthwiseConv2dNative"):
+            if cur_node.op in ("Conv2D", "DepthwiseConv2dNative", "Conv2DBackpropInput"):
                 data_format = cur_node.data_format
                 break
             for _node in cur_node.output_nodes:
@@ -929,7 +969,7 @@ class Model(object):
         # Loop back to deeper input to get data format
         while len(_inputs) > 0:
             n = _inputs[0]
-            if n.op in ("Conv2D", "DepthwiseConv2dNative"):
+            if n.op in ("Conv2D", "DepthwiseConv2dNative", "Conv2DBackpropInput"):
                 return n.data_format
             elif n.op == "MatMul":
                 return "HW"
@@ -957,13 +997,13 @@ class Model(object):
             if self.first_fc:
                 #   In the reason that it's necessary to reshape the input weights of fc layer from nchw to nChw[x]c of mkldnn,
                 # so we statistic output shape of common layers.
-                if n.op in ("Conv2D", "DepthwiseConv2dNative", "AvgPool", "MaxPool", "Mean", "ExtractImagePatches"):
+                if n.op in ("Conv2D", "DepthwiseConv2dNative", "Conv2DBackpropInput", "AvgPool", "MaxPool", "Mean", "ExtractImagePatches"):
                     fake_out = self.sess.run('%s:0'% n.name, feed_dict = self.feed_dict)
                     self.out_shape_dict[n.name] = fake_out.shape
 
 
             logger.info("Dump node, op:%s, name: %s" %(n.op, n.name))
-            if n.op in ("ConcatV2", "Add", "Relu6", "Softmax"):
+            if n.op in ("ConcatV2", "Add", "Softmax"):
                 dump_simple_op(n._node, n.name, self.get_input_names(n), topo_file)
             elif n.op == "Placeholder" \
                     or n.op == "Iterator" \
@@ -974,7 +1014,7 @@ class Model(object):
                 input_shape = self.get_input_shape(n)
                 dump_pool(n._node, n.name, self.get_input_names(n),
                           input_shape, n.output_shape, topo_file)
-            elif n.op in ("Conv2D", "DepthwiseConv2dNative"):
+            elif n.op in ("Conv2D", "DepthwiseConv2dNative", "Conv2DBackpropInput"):
                 input_shape = self.get_input_shape(n)
                 dump_convolution(n._node, n.name, self.get_input_names(n), n.conv_weights, n.have_bias,
                                  n.bias_weights, input_shape, n.output_shape, n.pad, topo_file, weights_file)
@@ -988,7 +1028,7 @@ class Model(object):
                 dump_mean(n._node, n.name, self.get_input_names(n), n.kernel_h, n.kernel_w, n.stride_h, n.stride_w, topo_file)
             elif n.op == "FusedBatchNorm":
                 dump_batchnorm(n._node, n.name, self.get_input_names(n), n.mean, n.variance, n.e, n.alpha, n.beta, topo_file, weights_file);
-            elif n.op == "Relu":
+            elif n.op in ("Relu", "Relu6"):
                 dump_relu(n, n.name, self.get_input_names(n), topo_file)
             # For debug usage
             elif n.op == "Mul" or n.op == "Maximum":
@@ -997,6 +1037,8 @@ class Model(object):
                 input_shape = self.get_input_shape(n)
                 dump_extract_image_patches(n._node, n.name, self.get_input_names(n),
                           input_shape, n.output_shape, topo_file)
+            elif n.op == "ResizeBilinear":
+                dump_resize_bilinear(n._node, n.name, n.out_height, n.out_width, n.align_corners, self.get_input_names(n), topo_file)
             else:
                 # Ignore the node by fixing input/output around the node, so that no node will use it as the input
                 nonconst_inputs = self.get_nonconst_input(n)

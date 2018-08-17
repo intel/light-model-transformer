@@ -13,6 +13,7 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 *******************************************************************************/
+
 #ifndef PATCH_MKLDNN_TYPES_H
 #define PATCH_MKLDNN_TYPES_H
 
@@ -25,19 +26,6 @@ extern "C" {
 #include <stdint.h>
 #include "mkldnn_types.h"
 #endif
-
-
-#if 0
-typedef enum {
-    /** A extract_image_patches primitive. */
-    mkldnn_extract_image_patches,
-} patch_mkldnn_primitive_kind_t;
-
-typedef enum {
-    mkldnn_query_extract_image_patches_d = 90, /**< extract_image_patches descriptor */
-} patch_mkldnn_query_t;
-#endif
-
 
 /** A descriptor of a extract_image_patches operation. */
 typedef struct {
@@ -71,6 +59,28 @@ typedef struct {
     int rate_h;
     int rate_w;
 } mkldnn_extract_image_patches_desc_t;
+
+/** A descriptor of a resize_bilinear operation. */
+typedef struct {
+    /** The kind of primitive. Used for self identifying the primitive
+     * descriptor. Must be #mkldnn_resize_bilinear. */
+    mkldnn_primitive_kind_t primitive_kind;
+    /** The kind of propagation. Possible values: #mkldnn_forward_training,
+     * #mkldnn_forward_inference, #mkldnn_backward, and #mkldnn_backward_data.
+     */
+    mkldnn_prop_kind_t prop_kind;
+    /** Source memory descriptor. */
+    mkldnn_memory_desc_t src_desc;
+    /** Source gradient memory descriptor. */
+    mkldnn_memory_desc_t diff_src_desc;
+    /** Destination memory descriptor. */
+    mkldnn_memory_desc_t dst_desc;
+    /** Destination gradient memory descriptor. */
+    mkldnn_memory_desc_t diff_dst_desc;
+    /** The accumulator data type. Initialized automatically. */
+    mkldnn_data_type_t accum_data_type;
+    int align_corners;
+} mkldnn_resize_bilinear_desc_t;
 
 #ifdef __cplusplus
 }

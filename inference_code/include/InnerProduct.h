@@ -13,6 +13,7 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 *******************************************************************************/
+
 #ifndef __INNERPRODUCT_H
 #define __INNERPRODUCT_H
 #include <iostream>
@@ -124,27 +125,14 @@ public:
     
     if (with_type == "Relu") {
         printf(" [with Relu].\n");
-        relu_dst_memory = relu(cpu_engine, ip_prim_desc, ip_dst_memory, 0.0, 0.0, net);
+        relu_dst_memory = relu(cpu_engine, ip_prim_desc, ip_dst_memory, 0.0, 0.0, net, with_type);
 
         return relu_dst_memory;
     } else if ( with_type == "Relu6" ) { 
         printf(" Relu6\n");
-#if 0
-        auto clip_desc = eltwise_forward::desc(prop_kind::forward,
-            algorithm::eltwise_clip,
-            ip_prim_desc->dst_primitive_desc().desc(),
-            min, max);
-        auto clip_prim_desc = eltwise_forward::primitive_desc(clip_desc, *cpu_engine);
+        relu_dst_memory = relu(cpu_engine, ip_prim_desc, ip_dst_memory, 6.0, 0.0, net, with_type);
 
-        this->clip_dst_memory = new memory(clip_prim_desc.dst_primitive_desc());
-        this->clip_fd = new eltwise_forward(clip_prim_desc, 
-            *ip_dst_memory,
-            *clip_dst_memory);
-
-        net.push_back(*clip_fd);
-
-        return clip_dst_memory;
-#endif
+        return relu_dst_memory;
     }else {
         printf("\n");
         return ip_dst_memory;

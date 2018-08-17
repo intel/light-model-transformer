@@ -13,6 +13,7 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 *******************************************************************************/
+
 #ifndef __RELU_H
 #define __RELU_H
 #include <iostream>
@@ -21,9 +22,11 @@
 using namespace mkldnn;
 
 memory *relu(engine *engine, convolution_forward::primitive_desc *p_prim_desc, 
-                memory *p_dst_memory, float alpha, float beta, std::vector<primitive> &net) {
-    auto _desc = eltwise_forward::desc(prop_kind::forward,
-            algorithm::eltwise_relu,
+                memory *p_dst_memory, float alpha, float beta, std::vector<primitive> &net, std::string relu_type) {
+    auto relu_kind_t = algorithm::eltwise_relu;
+    if (relu_type == "Relu6") relu_kind_t = algorithm::eltwise_bounded_relu;
+
+    auto _desc = eltwise_forward::desc(prop_kind::forward, relu_kind_t,
             p_prim_desc->dst_primitive_desc().desc(),
             alpha, beta);
     auto _prim_desc = eltwise_forward::primitive_desc(_desc, *engine);
@@ -35,26 +38,29 @@ memory *relu(engine *engine, convolution_forward::primitive_desc *p_prim_desc,
     return _dst_memory;
 }
 
-
 memory *relu(engine *engine, deconvolution_forward::primitive_desc *p_prim_desc,
-                 memory *p_dst_memory, float alpha, float beta, std::vector<primitive> &net) {
-     auto _desc = eltwise_forward::desc(prop_kind::forward,
-             algorithm::eltwise_relu,
-             p_prim_desc->dst_primitive_desc().desc(),
-             alpha, beta);
-     auto _prim_desc = eltwise_forward::primitive_desc(_desc, *engine);
- 
-     memory *_dst_memory = new memory(_prim_desc.dst_primitive_desc());
-     primitive *_fd = new eltwise_forward(_prim_desc, *p_dst_memory, *_dst_memory);
-     net.push_back(*_fd);
+                 memory *p_dst_memory, float alpha, float beta, std::vector<primitive> &net, std::string relu_type) {
+    auto relu_kind_t = algorithm::eltwise_relu;
+    if (relu_type == "Relu6") relu_kind_t = algorithm::eltwise_bounded_relu;
 
-     return _dst_memory;
- }
+    auto _desc = eltwise_forward::desc(prop_kind::forward, relu_kind_t,
+            p_prim_desc->dst_primitive_desc().desc(),
+            alpha, beta);
+    auto _prim_desc = eltwise_forward::primitive_desc(_desc, *engine);
+
+    memory *_dst_memory = new memory(_prim_desc.dst_primitive_desc());
+    primitive *_fd = new eltwise_forward(_prim_desc, *p_dst_memory, *_dst_memory);
+    net.push_back(*_fd);
+
+    return _dst_memory;
+}
 
 memory *relu(engine *engine, batch_normalization_forward::primitive_desc *p_prim_desc, 
-                memory *p_dst_memory, float alpha, float beta, std::vector<primitive> &net) {
-    auto _desc = eltwise_forward::desc(prop_kind::forward,
-            algorithm::eltwise_relu,
+                memory *p_dst_memory, float alpha, float beta, std::vector<primitive> &net, std::string relu_type) {
+    auto relu_kind_t = algorithm::eltwise_relu;
+    if (relu_type == "Relu6") relu_kind_t = algorithm::eltwise_bounded_relu;
+
+    auto _desc = eltwise_forward::desc(prop_kind::forward, relu_kind_t,
             p_prim_desc->dst_primitive_desc().desc(),
             alpha, beta);
     auto _prim_desc = eltwise_forward::primitive_desc(_desc, *engine);
@@ -67,9 +73,11 @@ memory *relu(engine *engine, batch_normalization_forward::primitive_desc *p_prim
 }
 
 memory *relu(engine *engine, inner_product_forward::primitive_desc *p_prim_desc, 
-                memory *p_dst_memory, float alpha, float beta, std::vector<primitive> &net) {
-    auto _desc = eltwise_forward::desc(prop_kind::forward,
-            algorithm::eltwise_relu,
+                memory *p_dst_memory, float alpha, float beta, std::vector<primitive> &net, std::string relu_type) {
+    auto relu_kind_t = algorithm::eltwise_relu;
+    if (relu_type == "Relu6") relu_kind_t = algorithm::eltwise_bounded_relu;
+
+    auto _desc = eltwise_forward::desc(prop_kind::forward, relu_kind_t,
             p_prim_desc->dst_primitive_desc().desc(),
             alpha, beta);
     auto _prim_desc = eltwise_forward::primitive_desc(_desc, *engine);
