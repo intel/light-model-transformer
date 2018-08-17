@@ -47,9 +47,6 @@ def get_consts_names(pb_path):
     result = []
     output_graph_path = pb_path
 
-    distribution = tf.contrib.distribute.OneDeviceStrategy('device:CPU:0')
-    run_config = tf.estimator.RunConfig(train_distribute=distribution)
-
     with tf.Graph().as_default() as g:
         output_graph_def = tf.GraphDef()
         with open(output_graph_path, "rb") as f:
