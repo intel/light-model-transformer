@@ -19,7 +19,7 @@ import argparse
 
 from string import Template
 
-MKLDNN_VERSION = 'v0.15'
+MKLDNN_VERSION = 'v0.16'
 MKLDNN_PATH = 'third_party/mkl-dnn'
 
 def exec_cmd(cmd, title, check_output=True):
