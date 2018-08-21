@@ -397,8 +397,8 @@ class Model(object):
                     self.consts.get(x) for x in n.input[1:]]
                 if _scale is not None:
                     _len = len(_scale)
-                    if not isinstance(_mean, np.ndarray): _mean = np.full([_len], 0.0)
-                    if not isinstance(_variance, np.ndarray): _variance = np.full([_len], 1.0)
+                    if not isinstance(_mean, np.ndarray): _mean = np.zeros(_len)
+                    if not isinstance(_variance, np.ndarray): _variance = np.ones(_len)
                     n.mean = _mean
                     n.variance = _variance
                     n.alpha = _scale
@@ -752,8 +752,13 @@ class Model(object):
                     _epsilon = n.e
                     _scale = n.alpha
                     _beta = n.beta
-                    _bias = np.full([pre_node.conv_weights.shape[-1]],
-                                0.0) if not pre_node.have_bias else pre_node.bias_weights
+                    if not pre_node.have_bias:
+                        if pre_node.data_format == 'NHWC':
+                            _bias = np.zeros(pre_node.conv_weights.shape[-1])
+                        else:
+                            _bias = np.zeros(pre_node.conv_weights.shape[1])
+                    else:
+                        _bias = pre_node.bias_weights
                     try:
                         _alpha = _scale / np.sqrt(_variance + _epsilon)
                     except Exception as e:
