@@ -843,6 +843,10 @@ class Model(object):
         for _node in merged_node.output_nodes:
             _node.input_nodes[_node.input_nodes.index(merged_node)] = merged_to
 
+        # Revise the output to make sure it can be found
+        if self.output_node == merged_node:
+            self.output_node = merged_to
+
     # Get all the nodes that the target_node depends on
     def get_depended_nodes(self, target_node):
         result = [target_node]
