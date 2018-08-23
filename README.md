@@ -19,6 +19,7 @@ Light Model Transformer is a light tool that could transform trained tensorflow 
 
   ```
   # Transform the model to internal representation
+  # Use --help to see all params
   python tf2topo.py --input_model_filename=./frozen.pb \
                 --weights_file=saved_model/weights.bin \
                 --pkl_file=saved_model/weights.pkl \
