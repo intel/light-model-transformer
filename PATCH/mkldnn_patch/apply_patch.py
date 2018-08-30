@@ -44,7 +44,7 @@ def exe_modify(mkldnn_path, modify_info):
         if not os.path.exists(origin_file): os.system("cp %s %s" % (target_file, origin_file))
 
         m_entrance, m_exit, m_content = [], [], []
-        for index in xrange(len(modify_info[m_file])):
+        for index in range(len(modify_info[m_file])):
             m_entrance.append(modify_info[m_file][index][0])
             m_exit.append(modify_info[m_file][index][1])
             m_content.append(modify_info[m_file][index][2:])
@@ -64,7 +64,7 @@ def exe_modify(mkldnn_path, modify_info):
 
             # Is ENTRANCE or not
             if modify_num == -1:
-                for index in xrange(len(m_entrance)):
+                for index in range(len(m_entrance)):
                     if m_entrance[index] in line:
                         modify_num = index
                 # continue no matter is ENTRANCE or not
@@ -73,7 +73,7 @@ def exe_modify(mkldnn_path, modify_info):
             # Got entrance, ready to modify
             # Save space num
             space_num = 0
-            for index in xrange(len(line)):
+            for index in range(len(line)):
                 if line[index] == " ": space_num += 1
                 else: break
 
@@ -88,7 +88,7 @@ def exe_modify(mkldnn_path, modify_info):
                 if m_entrance[modify_num] not in line:
                     ready_to_modify = True
             else:
-                for index in xrange(len(m_exit)):
+                for index in range(len(m_exit)):
                     if m_exit[index] in line:
                         ready_to_modify = True
 

@@ -46,7 +46,7 @@ def cpu_flag_contains_avx512():
 
 def is_gcc_support_avx512():
     str_version = exec_cmd("gcc -dumpversion", "Check gcc version")
-    versions = str_version.split('.')
+    versions = str_version.decode().split('.')
     if int(versions[0]) > 4:
         return True
     if int(versions[0]) == 4 and int(versions[1]) >= 9:
