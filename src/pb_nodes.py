@@ -24,12 +24,7 @@ else:
 
 
 def _fetch_const(sess, name):
-    try:
-        return sess.run(name+":0")
-    except Exception as e:
-        print(name)
-        raise e
-
+    return sess.run(name+":0")
 
 
 def has_const_input(c, name_node_dict):
@@ -82,5 +77,9 @@ def get_consts(pb_path):
             tf.import_graph_def(output_graph_def, name="")
             with tf.Session() as sess:
                 for name in const_names:
-                    result[name] = _fetch_const(sess, name)
+                    try:
+                        result[name] = _fetch_const(sess, name)
+                    except Exception as e:
+                        print("\tIgnore possible const node: %s" % name)
+
     return result
