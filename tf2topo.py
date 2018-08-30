@@ -309,11 +309,17 @@ class Model(object):
                     else:
                         _shape_str = str(node.attr['output_shapes'].list.shape[0].dim)[1:-1]
                     _shape_str = _shape_str.split('size: ')
-                    _input_shape[0] = int(_shape_str[2].strip('\n, '))
-                    _input_shape[1] = int(_shape_str[3].strip('\n, '))
-                    _input_shape[2] = int(_shape_str[4].strip('\n'))
-                    self.fake_data = np.ones(shape = (1, _input_shape[0], _input_shape[1], _input_shape[2]))
-                    self.feed_dict[self.get_tensor(node.name)] = self.fake_data
+                    if len(_shape_str) >= 5:
+                        _input_shape[0] = int(_shape_str[2].strip('\n, '))
+                        _input_shape[1] = int(_shape_str[3].strip('\n, '))
+                        _input_shape[2] = int(_shape_str[4].strip('\n'))
+                        fake_data = np.ones(shape = (1, _input_shape[0], _input_shape[1], _input_shape[2]))
+                    else:
+                        _input_shape[0] = -1
+                        _input_shape[1] = -1
+                        _input_shape[2] = -1
+                        fake_data = np.ones(shape = (1, 1, 1, 1))
+                    self.feed_dict[self.get_tensor(node.name)] = fake_data
                     self.place_holders.append(_node)
 
                 if node.op in ["Const", "Iterator", "OneShotIterator"]:
@@ -341,7 +347,9 @@ class Model(object):
     def optimize(self, extra_optimizer):
         # Make sure ONLY one placeholder
         if len(self.place_holders) > 1:
-            print("More than one place holder detected, not support yet!")
+            print("More than one place holder detected, not support yet. Placeholders detected:")
+            for holder in self.place_holders:
+                print("\t%s" % holder.name)
             exit(-1)
 
         elif len(self.place_holders) < 1:
