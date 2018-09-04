@@ -18,6 +18,7 @@
 #define __FORMAT_H
 #include "mkldnn.hpp"
 #include "patch_mkldnn.hpp"
+#include <cstring>
 
 using namespace mkldnn;
 
