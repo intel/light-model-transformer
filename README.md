@@ -1,6 +1,6 @@
 # Light Model Transformer
 
-Light Model Transformer is a light tool that could transform trained tensorflow model into C++ code. The generated code is based on Intel MKLDNN and provides inferface to do inference without any framework, intent to accelerate the inference performance.
+Light Model Transformer is a light tool that could transform trained tensorflow model into C++ code. The generated code is based on Intel MKLDNN and provides interface to do inference without any framework, intent to accelerate the inference performance.
 
 ## Usage:
 
