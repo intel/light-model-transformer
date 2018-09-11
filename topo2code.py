@@ -192,7 +192,7 @@ def get_create_vars_str(graph_dict):
         alias_name = graph_dict[key]["alias_name"]
         out_channel = graph_dict[key]["out_channel"]
         if op == "DepthwiseConv2dNative":
-            out_channel = out_channel * float(graph_dict[key]["group"])
+            out_channel = out_channel * int(graph_dict[key]["group"])
         
         if op in ["Conv2D", "DepthwiseConv2dNative", "Conv2DBackpropInput"]:
             ksize_h = graph_dict[key]["ksize_h"]
@@ -469,7 +469,7 @@ def topo_2_dict(topo_file):
         if op in ["Conv2D", "DepthwiseConv2dNative", "Conv2DBackpropInput", "MatMul"]:
             out_channel = graph_dict[key]["out_channel"]
             if op == "DepthwiseConv2dNative":
-                graph_dict[key]["out_channel"] = int(out_channel) / int(graph_dict[key]["group"])
+                graph_dict[key]["out_channel"] = int(int(out_channel) / int(graph_dict[key]["group"]))
         else:
             if op in ["Add", "ConcatV2"]:
                 input_len = len(graph_dict[key]["input_name"])
