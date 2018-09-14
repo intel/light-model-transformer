@@ -8,7 +8,7 @@
     - 'tensorflow_slim' points to the 'research/slim' directory of the model
 3) run test.py: python test.py
 
-## Example Output
+## Output Example
 ```
 [root@SKL tests]# python test.py
  Test model: inception_v1 start ............
