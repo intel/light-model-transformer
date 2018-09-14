@@ -236,9 +236,9 @@ cls_table = {
 
 
 class Model(object):
-    def __init__(self, pb_path, output_node_name):
+    def __init__(self, pb_path, output_node_names):
         self.pb_path = pb_path
-        self.output_node_name = output_node_name
+        self.output_node_names = output_node_names
         self.out_shape_dict = {}
 
         self.node_list = []
@@ -255,7 +255,7 @@ class Model(object):
         # Record all the placeholders/node, each element is a Node
         self.place_holders = []
         # Record output node
-        self.output_node = None
+        self.output_nodes = []
 
         self.first_fc = False
         self.alias_dict = {}
@@ -275,13 +275,13 @@ class Model(object):
             self.sess = tf.Session()
 
             # Get output node name if not defined
-            if self.output_node_name == "":
+            if not self.output_node_names:
                 _index = 0
                 while 1:
                     _index -= 1
                     if self.g_def.node[_index].op in ["Reshape", "Shape", "Identity"]:
                         continue
-                    self.output_node_name = self.g_def.node[_index].name
+                    self.output_node_names.append(self.g_def.node[_index].name)
                     break
 
             _input_shape = [0, 0, 0]
@@ -313,6 +313,7 @@ class Model(object):
                         _input_shape[0] = int(_shape_str[2].strip('\n, '))
                         _input_shape[1] = int(_shape_str[3].strip('\n, '))
                         _input_shape[2] = int(_shape_str[4].strip('\n'))
+                        _input_shape = [(x if x > 0 else 224) for x in _input_shape]
                         fake_data = np.ones(shape = (1, _input_shape[0], _input_shape[1], _input_shape[2]))
                     else:
                         _input_shape[0] = -1
@@ -332,15 +333,15 @@ class Model(object):
                         _node.data_format = decode_string(_format)
 
                 # Record the output node
-                if node.name == self.output_node_name:
-                    self.output_node = _node
+                if node.name in self.output_node_names:
+                    self.output_nodes.append(_node)
 
                 self.node_list.append(_node)
                 self.name_node_dict[node.name] = _node
 
-        # Check output node is found or not
-        if not self.output_node:
-            print("Cannot find output node: %s" % self.output_node_name)
+        # Check all the output nodes are found or not
+        if len(self.output_nodes) != len(self.output_node_names):
+            print("Cannot find all the output nodes")
             exit(-1)
 
 
@@ -385,7 +386,7 @@ class Model(object):
 
         # Get all the nodes that the outputdepends on
         print("To get node dependencies ...")
-        depends = self.get_depended_nodes(self.output_node)
+        depends = self.get_depended_nodes(self.output_nodes)
 
         # Latest data format
         data_format = "NHWC"
@@ -420,8 +421,13 @@ class Model(object):
                     n.kernel_h, n.kernel_w = _shape[2], _shape[3]
             elif n.op == "ResizeBilinear":
                 _shape = self.get_weights(n)
-                n.out_height = _shape[0]
-                n.out_width = _shape[1]
+                if _shape:
+                    n.out_height = _shape[0]
+                    n.out_width = _shape[1]
+                else:
+                    logger.warning("Cannot get output height and width for node: %s" % n.name)
+                    n.out_height = -1
+                    n.out_width = -1
                 n.align_corners = str(n._node.attr["align_corners"].b)
                     
 
@@ -433,7 +439,7 @@ class Model(object):
         self.erase_reshape_node(depends)
 
         # Only deal with the needed node (dependency changed, so get depended node again)
-        depends = self.get_depended_nodes(self.output_node)
+        depends = self.get_depended_nodes(self.output_nodes)
 
         # Merge some nodes if applicable
         while True:
@@ -454,9 +460,10 @@ class Model(object):
         self.deduce_calc_seq(depends)
 
         # Check the calculation sequence for output node whether ready
-        if not self.output_node.calc_seq:
-            print("Cannot get the calc sequence for output node!")
-            exit(-1)
+        for output_node in self.output_nodes:
+            if not output_node.calc_seq:
+                print("Cannot get the calc sequence for node: %s" % output_node.name)
+                exit(-1)
 
     # Check if the graph contains circle
     def contains_circle(self, node, visited, visit_stack):
@@ -852,12 +859,12 @@ class Model(object):
             _node.input_nodes[_node.input_nodes.index(merged_node)] = merged_to
 
         # Revise the output to make sure it can be found
-        if self.output_node == merged_node:
-            self.output_node = merged_to
+        if merged_node in self.output_nodes:
+            self.output_nodes[self.output_nodes.index(merged_node)] = merged_to
 
     # Get all the nodes that the target_node depends on
-    def get_depended_nodes(self, target_node):
-        result = [target_node]
+    def get_depended_nodes(self, target_nodes):
+        result = target_nodes.copy()
 
         # Enumerate all the dependencies in 'result' list
         idx = 0
@@ -911,11 +918,20 @@ class Model(object):
         return l_pad, r_pad, t_pad, b_pad
 
     def get_weights(self, node):
-        inputs = node.input
-        for ip in inputs:
-            ipt = self.name_node_dict.get(ip)
-            if ipt.is_const and ipt.op in ["Identity", "Const"]:
-                return self.consts.get(ip)
+        const_input_nodes = []
+        for n in node.input_nodes:
+            if n.is_const:
+                const_input_nodes.append(n)
+
+        # Only 1 const input
+        if len(const_input_nodes) == 1:
+            return self.consts.get(const_input_nodes[0].name)
+
+        # More than 1 const input
+        elif len(const_input_nodes) > 1:
+            for n in const_input_nodes:
+                if n.op in ["Identity", "Const"]:
+                    return self.consts.get(n.name)
 
 
     # Get non-const input for a node
@@ -958,7 +974,7 @@ class Model(object):
         # Default data format
         data_format = "NHWC"
 
-        # Traverse the output to find a conv node
+        # Traverse the output to find a conv node to get the data format
         work_queue = [input_node]
         idx = 0
         while idx < len(work_queue):
@@ -970,11 +986,14 @@ class Model(object):
                 work_queue.append(_node)
             idx += 1
 
+        shape = input_shape.as_list()
+        shape = [(x if x else -1) for x in shape]
+
         # Return value in the order of channel, height, width
         if data_format == "NHWC":
-            return input_shape[3], input_shape[1], input_shape[2]
+            return shape[3], shape[1], shape[2]
         elif data_format == "NCHW":
-            return input_shape[1], input_shape[2], input_shape[3] 
+            return shape[1], shape[2], shape[3]
         else:
             return None
 
@@ -1009,64 +1028,69 @@ class Model(object):
     # Write graph and weights to file
     def write_to_file(self, topo_file, weights_file):
         x_of_nChwxc = self._get_nChwxc()
+        dumped_nodes = []
 
-        for n in self.output_node.calc_seq:
-            if self.first_fc:
-                #   In the reason that it's necessary to reshape the input weights of fc layer from nchw to nChw[x]c of mkldnn,
-                # so we statistic output shape of common layers.
-                if n.op in ("Conv2D", "DepthwiseConv2dNative", "Conv2DBackpropInput", "AvgPool", "MaxPool", "Mean", "ExtractImagePatches"):
-                    fake_out = self.sess.run('%s:0'% n.name, feed_dict = self.feed_dict)
-                    self.out_shape_dict[n.name] = fake_out.shape
-
-
-            logger.info("Dump node, op:%s, name: %s" %(n.op, n.name))
-            if n.op in ("ConcatV2", "Add", "Softmax"):
-                dump_simple_op(n._node, n.name, self.get_input_names(n), topo_file)
-            elif n.op == "Placeholder" \
-                    or n.op == "Iterator" \
-                    or n.op == "OneShotIterator":
-                channel, height, width = self.get_graph_input()
-                dump_placeholder(n.name, topo_file, height, width, channel)
-            elif n.op in ("AvgPool", "MaxPool"):
-                input_shape = self.get_input_shape(n)
-                dump_pool(n._node, n.name, self.get_input_names(n),
-                          input_shape, n.output_shape, topo_file)
-            elif n.op in ("Conv2D", "DepthwiseConv2dNative", "Conv2DBackpropInput"):
-                input_shape = self.get_input_shape(n)
-                dump_convolution(n._node, n.name, self.get_input_names(n), n.conv_weights, n.have_bias,
-                                 n.bias_weights, input_shape, n.output_shape, n.pad, topo_file, weights_file)
-            elif n.op == "MatMul":
-                input_shape = self.get_input_shape(n)
-                input_format = self.get_input_format(n)
-                dump_fc(n._node, n.name, self.get_input_names(n), self.first_fc, input_shape, n.fc_weights,
-                        n.have_bias, n.bias_weights, n.output_shape[1], topo_file, weights_file, input_format, x_of_nChwxc)
-                self.first_fc = False
-            elif n.op == "Mean":
-                dump_mean(n._node, n.name, self.get_input_names(n), n.kernel_h, n.kernel_w, n.stride_h, n.stride_w, topo_file)
-            elif n.op == "FusedBatchNorm":
-                dump_batchnorm(n._node, n.name, self.get_input_names(n), n.mean, n.variance, n.e, n.alpha, n.beta, topo_file, weights_file);
-            elif n.op in ("Relu", "Relu6"):
-                dump_relu(n, n.name, self.get_input_names(n), topo_file)
-            # For debug usage
-            elif n.op == "Mul" or n.op == "Maximum":
-                dump_simple_op(n._node, n.name, self.get_input_names(n), topo_file)
-            elif n.op == "ExtractImagePatches":
-                input_shape = self.get_input_shape(n)
-                dump_extract_image_patches(n._node, n.name, self.get_input_names(n),
-                          input_shape, n.output_shape, topo_file)
-            elif n.op == "ResizeBilinear":
-                dump_resize_bilinear(n._node, n.name, n.out_height, n.out_width, n.align_corners, self.get_input_names(n), topo_file)
-            else:
-                # Ignore the node by fixing input/output around the node, so that no node will use it as the input
-                nonconst_inputs = self.get_nonconst_input(n)
-                if len(nonconst_inputs) == 1:
-                    self.fix_graph(n, nonconst_inputs[0])
-                    logger.warning("Ignored %s, %s" % (n.op, n.name))
+        for output_node in self.output_nodes:
+            for n in output_node.calc_seq:
+                if n in dumped_nodes:
+                    continue
+                if self.first_fc:
+                    #   In the reason that it's necessary to reshape the input weights of fc layer from nchw to nChw[x]c of mkldnn,
+                    # so we statistic output shape of common layers.
+                    if n.op in ("Conv2D", "DepthwiseConv2dNative", "Conv2DBackpropInput", "AvgPool", "MaxPool", "Mean", "ExtractImagePatches"):
+                        fake_out = self.sess.run('%s:0'% n.name, feed_dict = self.feed_dict)
+                        self.out_shape_dict[n.name] = fake_out.shape
+    
+                logger.info("Dump node, op:%s, name: %s" %(n.op, n.name))
+                if n.op in ("ConcatV2", "Add", "Softmax"):
+                    dump_simple_op(n._node, n.name, self.get_input_names(n), topo_file)
+                elif n.op == "Placeholder" \
+                        or n.op == "Iterator" \
+                        or n.op == "OneShotIterator":
+                    channel, height, width = self.get_graph_input()
+                    dump_placeholder(n.name, topo_file, height, width, channel)
+                elif n.op in ("AvgPool", "MaxPool"):
+                    input_shape = self.get_input_shape(n)
+                    dump_pool(n._node, n.name, self.get_input_names(n),
+                              input_shape, n.output_shape, topo_file)
+                elif n.op in ("Conv2D", "DepthwiseConv2dNative", "Conv2DBackpropInput"):
+                    input_shape = self.get_input_shape(n)
+                    dump_convolution(n._node, n.name, self.get_input_names(n), n.conv_weights, n.have_bias,
+                                     n.bias_weights, input_shape, n.output_shape, n.pad, topo_file, weights_file)
+                elif n.op == "MatMul":
+                    input_shape = self.get_input_shape(n)
+                    input_format = self.get_input_format(n)
+                    dump_fc(n._node, n.name, self.get_input_names(n), self.first_fc, input_shape, n.fc_weights,
+                            n.have_bias, n.bias_weights, n.output_shape[1], topo_file, weights_file, input_format, x_of_nChwxc)
+                    self.first_fc = False
+                elif n.op == "Mean":
+                    dump_mean(n._node, n.name, self.get_input_names(n), n.kernel_h, n.kernel_w, n.stride_h, n.stride_w, topo_file)
+                elif n.op == "FusedBatchNorm":
+                    dump_batchnorm(n._node, n.name, self.get_input_names(n), n.mean, n.variance, n.e, n.alpha, n.beta, topo_file, weights_file);
+                elif n.op in ("Relu", "Relu6"):
+                    dump_relu(n, n.name, self.get_input_names(n), topo_file)
+                # For debug usage
+                elif n.op == "Mul" or n.op == "Maximum":
+                    dump_simple_op(n._node, n.name, self.get_input_names(n), topo_file)
+                elif n.op == "ExtractImagePatches":
+                    input_shape = self.get_input_shape(n)
+                    dump_extract_image_patches(n._node, n.name, self.get_input_names(n),
+                              input_shape, n.output_shape, topo_file)
+                elif n.op == "ResizeBilinear":
+                    dump_resize_bilinear(n._node, n.name, n.out_height, n.out_width, n.align_corners, self.get_input_names(n), topo_file)
                 else:
-                    logger.error("Cannot handle %s, %s" % (n.op, n.name))
-                    for _node in nonconst_inputs:
-                        print("  ", _node)
-                    #exit(-1)
+                    # Ignore the node by fixing input/output around the node, so that no node will use it as the input
+                    nonconst_inputs = self.get_nonconst_input(n)
+                    if len(nonconst_inputs) == 1:
+                        self.fix_graph(n, nonconst_inputs[0])
+                        logger.warning("Ignored %s, %s" % (n.op, n.name))
+                    else:
+                        logger.error("Cannot handle %s, %s" % (n.op, n.name))
+                        for _node in nonconst_inputs:
+                            print("  ", _node)
+                        #exit(-1)
+
+                dumped_nodes.append(n)
 
 
 if __name__ == '__main__':
@@ -1075,7 +1099,8 @@ if __name__ == '__main__':
     parser.add_argument("--input_model_filename", default="./mobilenet_224.pb",
                         type=str, help="Frozen model file to read")
     parser.add_argument("--output_node_name", default="",
-                        type=str, help="The last node where to get prediction result")
+                        type=str, help="The last node where to get prediction result. "
+                                       "If there are multiple output nodes, separate them with ','")
     parser.add_argument("--weights_file", default="./weights.bin",
                         type=str, help="File to dump the weights")
     parser.add_argument("--pkl_file", default="./weights.pkl",
@@ -1085,7 +1110,8 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    m = Model(args.input_model_filename, args.output_node_name)
+    names = args.output_node_name.split(',') if args.output_node_name else [];
+    m = Model(args.input_model_filename, names)
 
     m.optimize(None)
 
