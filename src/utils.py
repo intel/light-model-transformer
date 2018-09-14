@@ -254,21 +254,28 @@ def dump_depthwiseconv_weights(conv_weights, have_bias, conv_bias, weights_file)
 
 # Refer to tensorflow.org/api_guides/python/nn#Convolution
 def get_pad_value(node, padding, data_format, ksize_h, ksize_w, stride_h, stride_w, input_shape, output_shape):
+    in_shape = input_shape.as_list()
+    out_shape = output_shape.as_list()
+
+    if not in_shape[1] or not in_shape[2] or not in_shape[3] or not out_shape[1] or not out_shape[2] or not out_shape[3]:
+        logger.warning("Cannot get padding value for node %s" % node.name)
+        return -1, -1, -1, -1
+
     if node.op == "Conv2DBackpropInput": 
-        tmp_shape = input_shape
-        input_shape = output_shape
-        output_shape = input_shape
+        tmp_shape = in_shape
+        in_shape = out_shape
+        out_shape = in_shape
 
     if data_format == 'NHWC':
-        in_height = int(input_shape[1])
-        in_width = int(input_shape[2])
-        out_height = int(output_shape[1])
-        out_width = int(output_shape[2])
+        in_height = in_shape[1]
+        in_width = in_shape[2]
+        out_height = out_shape[1]
+        out_width = out_shape[2]
     else:
-        in_height = int(input_shape[2])
-        in_width = int(input_shape[3])
-        out_height = int(output_shape[2])
-        out_width = int(output_shape[3])
+        in_height = in_shape[2]
+        in_width = in_shape[3]
+        out_height = out_shape[2]
+        out_width = out_shape[3]
 
     if padding == 'VALID':
         pad_left = 0
