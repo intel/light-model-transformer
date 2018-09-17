@@ -236,8 +236,9 @@ cls_table = {
 
 
 class Model(object):
-    def __init__(self, pb_path, output_node_names):
+    def __init__(self, pb_path, input_node_names, output_node_names):
         self.pb_path = pb_path
+        self.input_node_names = input_node_names
         self.output_node_names = output_node_names
         self.out_shape_dict = {}
 
@@ -302,7 +303,8 @@ class Model(object):
                     _node.is_const = False
 
                 # Placeholder/input
-                if node.op in ['Placeholder', 'Iterator', 'OneShotIterator']:
+                if (self.input_node_names and (node.name in self.input_node_names)) or \
+                    node.op in ['Placeholder', 'Iterator', 'OneShotIterator']:
                     _shape_str = ''
                     if node.op == "Placeholder":
                         _shape_str = str(node.attr.get('shape').shape.dim)[1:-1]
@@ -864,7 +866,7 @@ class Model(object):
 
     # Get all the nodes that the target_node depends on
     def get_depended_nodes(self, target_nodes):
-        result = target_nodes.copy()
+        result = list(target_nodes)
 
         # Enumerate all the dependencies in 'result' list
         idx = 0
@@ -1098,6 +1100,8 @@ if __name__ == '__main__':
 
     parser.add_argument("--input_model_filename", default="./mobilenet_224.pb",
                         type=str, help="Frozen model file to read")
+    parser.add_argument("--input_node_name", default="",
+                        type=str, help="Input node name, default is the Placeholder")
     parser.add_argument("--output_node_name", default="",
                         type=str, help="The last node where to get prediction result. "
                                        "If there are multiple output nodes, separate them with ','")
@@ -1110,8 +1114,9 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    names = args.output_node_name.split(',') if args.output_node_name else [];
-    m = Model(args.input_model_filename, names)
+    in_names = args.input_node_name.split(',') if args.input_node_name else [];
+    out_names = args.output_node_name.split(',') if args.output_node_name else [];
+    m = Model(args.input_model_filename, in_names, out_names)
 
     m.optimize(None)
 
