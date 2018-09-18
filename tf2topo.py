@@ -305,22 +305,12 @@ class Model(object):
                 # Placeholder/input
                 if (self.input_node_names and (node.name in self.input_node_names)) or \
                     node.op in ['Placeholder', 'Iterator', 'OneShotIterator']:
-                    _shape_str = ''
-                    if node.op == "Placeholder":
-                        _shape_str = str(node.attr.get('shape').shape.dim)[1:-1]
-                    else:
-                        _shape_str = str(node.attr['output_shapes'].list.shape[0].dim)[1:-1]
-                    _shape_str = _shape_str.split('size: ')
-                    if len(_shape_str) >= 5:
-                        _input_shape[0] = int(_shape_str[2].strip('\n, '))
-                        _input_shape[1] = int(_shape_str[3].strip('\n, '))
-                        _input_shape[2] = int(_shape_str[4].strip('\n'))
-                        _input_shape = [(x if x > 0 else 224) for x in _input_shape]
+                    shape = self.get_tensor_shape(node.name).as_list()
+                    shape = [x if x else -1 for x in shape]
+                    _input_shape = [shape[1], shape[2], shape[3]]
+                    if _input_shape[0] > 0 and  _input_shape[1] > 0 and _input_shape[2] > 0:
                         fake_data = np.ones(shape = (1, _input_shape[0], _input_shape[1], _input_shape[2]))
                     else:
-                        _input_shape[0] = -1
-                        _input_shape[1] = -1
-                        _input_shape[2] = -1
                         fake_data = np.ones(shape = (1, 1, 1, 1))
                     self.feed_dict[self.get_tensor(node.name)] = fake_data
                     self.place_holders.append(_node)
@@ -871,6 +861,10 @@ class Model(object):
         # Enumerate all the dependencies in 'result' list
         idx = 0
         while idx < len(result):
+            # the node is an input/placeholder
+            if result[idx] in self.place_holders:
+                idx += 1
+                continue
             for dep in result[idx].input_nodes:
                 # the node is not added to the list yet
                 if dep not in result:
