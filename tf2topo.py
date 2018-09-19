@@ -304,7 +304,7 @@ class Model(object):
 
                 # Placeholder/input
                 if (self.input_node_names and (node.name in self.input_node_names)) or \
-                    node.op in ['Placeholder', 'Iterator', 'OneShotIterator']:
+                        (not self.input_node_names and node.op in ['Placeholder', 'Iterator', 'OneShotIterator']):
                     shape = self.get_tensor_shape(node.name).as_list()
                     shape = [x if x else -1 for x in shape]
                     _input_shape = [shape[1], shape[2], shape[3]]
