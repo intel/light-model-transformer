@@ -225,10 +225,12 @@ cls_table = {
     "Conv2D": ConvNode,
     "DepthwiseConv2dNative": ConvNode,
     "ConcatV2": ConcatNode,
+    "Concat": ConcatNode,
     "MatMul": FcNode,
     "Add": AddNode,
     "Mean": MeanNode,
     "FusedBatchNorm": BatchNormNode,
+    "BatchNormWithGlobalNormalization": BatchNormNode,
     "ReluNode": ReluNode,
     "ExtractImagePatches": ExtractImagePatchesNode,
     "Conv2DBackpropInput": DeConvNode,
@@ -404,6 +406,19 @@ class Model(object):
                     n.variance = _variance
                     n.alpha = _scale
                     n.beta = _beta
+            elif n.op == "BatchNormWithGlobalNormalization":
+                n.e = n._node.attr["variance_epsilon"].f
+                _mean, _variance, _beta, _scale = [
+                    self.consts.get(x) for x in n.input[1:]]
+                if _scale is not None:
+                    _len = len(_scale)
+                    if not isinstance(_mean, np.ndarray): _mean = np.full([_len], 0.0)
+                    if not isinstance(_variance, np.ndarray): _variance = np.full([_len], 1.0)
+                    n.mean = _mean
+                    n.variance = _variance
+                    n.alpha = _scale
+                    n.beta = _beta
+                    
             elif n.op == "Mean":
                 _input = self.get_input_names(n)[0]
                 _shape = self.get_tensor_shape(_input)
@@ -413,7 +428,7 @@ class Model(object):
                     n.kernel_h, n.kernel_w = _shape[2], _shape[3]
             elif n.op == "ResizeBilinear":
                 _shape = self.get_weights(n)
-                if _shape:
+                if _shape is not None:
                     n.out_height = _shape[0]
                     n.out_width = _shape[1]
                 else:
@@ -482,7 +497,7 @@ class Model(object):
             if _node.op != 'Identity':
                 continue
 
-            if len(_node.input_nodes) == 1:
+            if len(_node.input_nodes) >= 1:
                 _node.merged = True
                 merged_to = _node.input_nodes[0]
                 self.fix_graph(_node, merged_to)
@@ -745,7 +760,7 @@ class Model(object):
             if n.merged:
                 continue
 
-            if n.op == "FusedBatchNorm":
+            if n.op in ("FusedBatchNorm","BatchNormWithGlobalNormalization"):
                 nonconst_inputs = []
                 for _input in n.input_nodes:
                     if not _input.is_const: nonconst_inputs.append(_input)
@@ -1028,6 +1043,11 @@ class Model(object):
 
         for output_node in self.output_nodes:
             for n in output_node.calc_seq:
+                # Borrow ConvatV2 to write to file
+                if n.op == "Concat":
+                    n.op = "ConcatV2"
+                    n._node.op = "ConcatV2"
+                
                 if n in dumped_nodes:
                     continue
                 if self.first_fc:
@@ -1061,7 +1081,7 @@ class Model(object):
                     self.first_fc = False
                 elif n.op == "Mean":
                     dump_mean(n._node, n.name, self.get_input_names(n), n.kernel_h, n.kernel_w, n.stride_h, n.stride_w, topo_file)
-                elif n.op == "FusedBatchNorm":
+                elif n.op in("FusedBatchNorm","BatchNormWithGlobalNormalization"):
                     dump_batchnorm(n._node, n.name, self.get_input_names(n), n.mean, n.variance, n.e, n.alpha, n.beta, topo_file, weights_file);
                 elif n.op in ("Relu", "Relu6"):
                     dump_relu(n, n.name, self.get_input_names(n), topo_file)
