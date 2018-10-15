@@ -30,17 +30,19 @@ public:
           int in_channels, 
           int in_h, int in_w, 
           int out_h, int out_w, 
+          int h_times, int w_times, 
           const std::string &_align_corners = "False",
-          const std::string &_quantize_type = "fp32",
-          int _scale_out = 0.0, // int8 or fp32
-          int _rate = 1.0):
+          const std::string &_quantize_type = "fp32", // int8 or fp32
+          int _scale_out = 0.0):
           name(_name), quantize_type(_quantize_type), scale_out(_scale_out) {
     this->out_channels = in_channels;
     this->in_channels = in_channels;
     this->in_h = in_h;
     this->in_w = in_w;
-    this->out_h = out_h;
-    this->out_w = out_w;
+    if (out_h == 0) this->out_h = in_h * h_times;
+    else this->out_h = out_h;
+    if (out_w == 0) this->out_w = in_w * w_times;
+    else this->out_w = out_w;
 
     if ( this->out_h == 0 || this->out_w == 0 ) {
         std::cout << std::endl;
@@ -84,18 +86,18 @@ public:
     memory::data_type bottom_dt = quantize_type == "int8" ? memory::data_type::u8 : memory::data_type::f32;
     memory::data_type top_dt = quantize_type == "int8" ? memory::data_type::u8 : memory::data_type::f32;
 
-    auto bilinear_src_md = memory::desc({bilinear_src_tz}, bottom_dt, mfmt_any);
     auto bilinear_dst_md = memory::desc({bilinear_dst_tz}, top_dt, mfmt_any);
 
     // create a resize_bilinear
-    auto bilinear_desc = resize_bilinear_forward::desc(prop_kind::forward,
+    auto bilinear_desc = resize_bilinear_forward::desc(prop_kind::forward_scoring,
                 bottom.get_primitive_desc().desc(), bilinear_dst_md, align_corners);
     this->p_prim_desc = new resize_bilinear_forward::primitive_desc(bilinear_desc, *cpu_engine);
     this->p_dst_memory = new memory(p_prim_desc->dst_primitive_desc());
 
     // Seems resize_bilinear does not need to reorder the src
-    this->p_indices_memory = new memory(p_prim_desc->workspace_primitive_desc());
-    this->bilinear_fd = new resize_bilinear_forward(*p_prim_desc, bottom, *p_dst_memory, *p_indices_memory);
+//    this->p_indices_memory = new memory(p_prim_desc->workspace_primitive_desc());
+    //this->bilinear_fd = new resize_bilinear_forward(*p_prim_desc, bottom, *p_dst_memory, *p_indices_memory);
+    this->bilinear_fd = new resize_bilinear_forward(*p_prim_desc, bottom, *p_dst_memory);
 
     net.push_back(*bilinear_fd);
     fmt = GetOutputFormat(cpu_engine, p_prim_desc, top_dt, bilinear_dst_tz);

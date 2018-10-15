@@ -13,6 +13,7 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 *******************************************************************************/
+
 #ifndef __SOFTMAX_H
 #define __SOFTMAX_H
 #include <iostream>

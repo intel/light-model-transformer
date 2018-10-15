@@ -32,7 +32,7 @@ public:
             char concat_dim_char,
             std::vector<std::string> _quantize_types,
             std::vector<float> _scales):
-            name(_name) { 
+            name(_name), quantize_types(_quantize_types), scales(_scales) { 
         this->concat_dim = 0;
         this->concat_dim_char = concat_dim_char;
         this->out_channels = 0;
@@ -41,19 +41,6 @@ public:
         this->in_dims = in_dims;
 
         this->end_index = in_dims.size();
-
-        this->quantize_type1 = _quantize_types[0];
-        this->scale_in1 = _scales[0];
-        this->quantize_type2 = _quantize_types[1];
-        this->scale_in2 = _scales[1];
-        if ( this->end_index > 2 ) {
-            this->quantize_type3 = _quantize_types[2];
-            this->scale_in3 = _scales[2];
-            if ( this->end_index > 3 ) {
-                this->quantize_type4 = _quantize_types[3];
-                this->scale_in4 = _scales[3];
-            }
-        }
 
         out_channels = in_dims[0][0];
         out_h = in_dims[0][1];
@@ -127,33 +114,16 @@ public:
 
         std::vector<primitive::at> inputs;
 
-        // Prepare input of quantize(int8) or fp32 
-        if ( quantize_type1 == "int8" ) {
-            reorder1 = new Reorder(scale_in1, batch, in_dims[0][0], in_dims[0][1], in_dims[0][2]);
-            fp32_in_memory1 = reorder1->Init(cpu_engine, bottoms[0], net, mfmt_nhwc);
-            inputs.push_back( *fp32_in_memory1 );
-        } else inputs.push_back( bottoms[0] );
-
-        if ( quantize_type2 == "int8" ) {
-            reorder2 = new Reorder(scale_in2, batch, in_dims[1][0], in_dims[1][1], in_dims[1][2]);
-            fp32_in_memory2 = reorder2->Init(cpu_engine, bottoms[1], net, mfmt_nhwc);
-            inputs.push_back( *fp32_in_memory2 );
-        } else inputs.push_back( bottoms[1] );
-
-        if ( end_index >= 2 ) {
-            if ( quantize_type3 == "int8" ) {
-                reorder3 = new Reorder(scale_in3, batch, in_dims[2][0], in_dims[2][1], in_dims[2][2]);
-                fp32_in_memory3 = reorder3->Init(cpu_engine, bottoms[2], net, mfmt_nhwc);
-                inputs.push_back( *fp32_in_memory3 );
-            } else inputs.push_back( bottoms[2] );
-        }
-
-        if ( end_index >= 3 ) {
-            if ( quantize_type4 == "int8" ) {
-                reorder4 = new Reorder(scale_in4, batch, in_dims[3][0], in_dims[3][1], in_dims[3][2]);
-                fp32_in_memory4 = reorder4->Init(cpu_engine, bottoms[3], net, mfmt_nhwc);
-                inputs.push_back( *fp32_in_memory4 );
-            } else inputs.push_back( bottoms[3] );
+        int quantize_num = -1;
+        for ( int i = 0; i < end_index; i ++ ) {
+            if ( quantize_types[i] == "int8" ) {
+                quantize_num ++;
+                reorders.push_back(new Reorder(scales[i], batch, in_dims[i][0], in_dims[i][1], in_dims[i][2]));
+                fp32_in_memorys.push_back(reorders[quantize_num]->Init(cpu_engine, bottoms[i], net, mfmt_nhwc));
+                inputs.push_back( *fp32_in_memorys[quantize_num] );
+            } else {
+                inputs.push_back( bottoms[i] );
+            }
         }
 
         // Prepare format of input
@@ -218,10 +188,10 @@ private:
     int begin_index;
     int end_index;
 
-    std::string quantize_type1, quantize_type2, quantize_type3, quantize_type4;
-    float scale_in1, scale_in2, scale_in3, scale_in4;
-    memory *fp32_in_memory1, *fp32_in_memory2, *fp32_in_memory3, *fp32_in_memory4;
-    Reorder *reorder1, *reorder2, *reorder3, *reorder4;
+    std::vector<std::string> quantize_types;
+    std::vector<float> scales;
+    std::vector<Reorder*> reorders;
+    std::vector<memory*> fp32_in_memorys;
 
     std::string r_fmt;
     engine *cpu_engine;

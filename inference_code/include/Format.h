@@ -184,8 +184,6 @@ std::string GetOutputFormat(engine *engine, deconvolution_forward::primitive_des
      return "unknown";
  }
 
-
-
 std::string GetOutputFormat(engine *engine, inner_product_forward::primitive_desc *p_prim_desc, 
                             memory::data_type type, memory::dims &dim) {
     for (int i = 0; i < sizeof(formats) / sizeof(memory::format); ++i) {
@@ -193,6 +191,17 @@ std::string GetOutputFormat(engine *engine, inner_product_forward::primitive_des
         auto memory_descriptor = memory::primitive_desc(md, *engine);
         if (memory::primitive_desc(p_prim_desc->dst_primitive_desc()) == memory_descriptor)
             return format_2d_names[i];
+    }
+    return "unknown";
+}
+
+std::string GetOutputFormat(engine *engine, sum::primitive_desc *p_prim_desc, 
+                            memory::data_type type, memory::dims &dim) {
+    for (int i = 0; i < sizeof(formats) / sizeof(memory::format); ++i) {
+        auto md = memory::desc({dim}, type, formats[i]);
+        auto memory_descriptor = memory::primitive_desc(md, *engine);
+        if (memory::primitive_desc(p_prim_desc->dst_primitive_desc()) == memory_descriptor)
+            return format_names[i];
     }
     return "unknown";
 }

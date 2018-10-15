@@ -140,6 +140,13 @@ public:
         _attr.set_int_output_round_mode(round_mode::round_nearest);
     }
 
+    post_ops ops;
+    if ( with_type == "Relu" ) {
+        const float ops_scale = 1.f;
+        ops.append_eltwise(ops_scale, algorithm::eltwise_relu, alpha, beta);
+        _attr.set_post_ops(ops);
+    }
+
     this->p_prim_desc = new
             convolution_forward::primitive_desc(_desc, _attr, *cpu_engine);
 
@@ -156,11 +163,13 @@ public:
             user_weights_memory.get_primitive_desc()) {
 		std::cout << " Need to reorder the weights";
         p_weights_memory = new memory(p_prim_desc->weights_primitive_desc());
-        Reorder reorder(scale_params);
         if ( quantize_type == "int8" ) {
             std::cout << "(s8)";
+            //Reorder reorder(scale_params, out_channels, in_channels, kernel_h, kernel_w);
+            Reorder reorder(scale_params);
             p_weights_memory = reorder.Init(user_weights_memory, *p_weights_memory, true);
         } else {
+            Reorder reorder(1.0);
             p_weights_memory = reorder.Init(user_weights_memory, *p_weights_memory, false);
         }
     } else {
@@ -183,11 +192,13 @@ public:
 
     if (memory::primitive_desc(p_prim_desc->src_primitive_desc()) !=
             bottom.get_primitive_desc()) {
-        std::cout << ", input";
+        std::cout << ", input(" << quantize_type << ")";
         p_src_memory = new memory(p_prim_desc->src_primitive_desc());
         if ( quantize_type == "int8" ) {
-            std::cout << "(u8)";
             Reorder reorder(scale_in);
+            p_src_memory = reorder.Init(bottom, *p_src_memory, net);
+        } else if ( quantize_type == "2fp32" ) {
+            Reorder reorder(1/scale_in);
             p_src_memory = reorder.Init(bottom, *p_src_memory, net);
         } else {
             net.push_back(reorder(bottom, *p_src_memory));
@@ -211,9 +222,8 @@ public:
         return _dst_memory;
     } else if ( with_type == "Relu" ) { 
 		printf(" - [with Relu].\n");
-        _dst_memory = relu(cpu_engine, p_prim_desc, p_dst_memory, alpha, beta, net, with_type);
-
-        return _dst_memory;
+//        _dst_memory = relu(cpu_engine, p_prim_desc, p_dst_memory, alpha, beta, net, with_type);
+//        return _dst_memory;
     } else {
 		printf("\n");
 	}
@@ -256,6 +266,8 @@ private:
   std::string quantize_type;
   std::vector<float> _scales, in_scales;
   float scale_in, scale_out, scale_params;
+  Reorder *reorder_in, *reorder_w, *reorder_b;
+  memory *fp32_in_memory;
 
   std::string with_type;
 

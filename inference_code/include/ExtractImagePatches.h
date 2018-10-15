@@ -13,6 +13,7 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 *******************************************************************************/
+
 #ifndef __EXTRACT_IMAGE_PATCHES_H
 #define __EXTRACT_IMAGE_PATCHES_H
 #include <iostream>

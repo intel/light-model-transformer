@@ -177,11 +177,13 @@ public:
 
     if (memory::primitive_desc(p_prim_desc->src_primitive_desc()) !=
             bottom.get_primitive_desc()) {
-        std::cout << ", input";
+        std::cout << ", input(" << quantize_type << ")";
         p_src_memory = new memory(p_prim_desc->src_primitive_desc());
         if ( quantize_type == "int8" ) {
-            std::cout << "(u8)";
             Reorder reorder(scale_in);
+            p_src_memory = reorder.Init(bottom, *p_src_memory, net);
+        } else if ( quantize_type == "2fp32" ) {
+            Reorder reorder(1/scale_in);
             p_src_memory = reorder.Init(bottom, *p_src_memory, net);
         } else {
             net.push_back(reorder(bottom, *p_src_memory));

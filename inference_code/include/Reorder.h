@@ -13,6 +13,7 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 *******************************************************************************/
+
 #ifndef __REORDER_H
 #define __REORDER_H
 #include <iostream>
@@ -35,7 +36,10 @@ public:
         this->dim3 = _dim3;
         this->dim4 = _dim4;
         this->scale = _scale;
-        if ( _dim3 == 0 ) {
+        if ( _dim2 == 0 ) {
+            this->user_dst = new float[dim1];
+            this->user_dst_tz = {dim1};
+        } else if ( _dim3 == 0 ) {
             this->user_dst = new float[dim1 * dim2];
             this->user_dst_tz = {dim1, dim2};
         } else {
@@ -53,6 +57,7 @@ public:
 
     // fp32 -> int8, execute right now
     memory *Init(memory user_src_memory, memory &user_dst_memory, bool need_quantize=false) {
+//        std::cout << name.c_str() << "(fp32 -> int8), 1" << std::endl;
         std::vector<primitive> tmp_net;
 
         if ( need_quantize ) {
@@ -74,6 +79,7 @@ public:
 
     // fp32 -> int8, don't execute
     memory *Init(memory &user_src_memory, memory &user_dst_memory, std::vector<primitive> &net) {
+//        std::cout << name.c_str() << "(fp32 -> int8), 2" << std::endl;
         primitive_attr dst_attr;
         dst_attr.set_int_output_round_mode(round_mode::round_nearest);
         std::vector<float> dst_scales = { scale };
@@ -86,6 +92,7 @@ public:
 
     // int8 -> fp32
     memory *Init(engine *engine, memory &bottom, std::vector<primitive> &net, memory::format mfmt) {
+//        std::cout << name.c_str() << "(int8 -> fp32), 1" << std::endl;
         p_dst_memory = new memory({{{user_dst_tz},
                 memory::data_type::f32, mfmt}, *engine }, user_dst);
 
@@ -103,12 +110,13 @@ public:
 
     // int8 -> fp32
     memory *Init(engine *engine, memory &bottom, std::vector<primitive> &net) {
-//        std::cout << name.c_str() << "(int8 -> fp32)" << std::endl;
+//        std::cout << name.c_str() << "(int8 -> fp32), 2: " << scale << std::endl;
         p_dst_memory = new memory({{{user_dst_tz},
                 memory::data_type::f32, memory::format::oihw}, *engine }, user_dst);
 
         primitive_attr dst_attr;
         dst_attr.set_int_output_round_mode(round_mode::round_nearest);
+//        dst_attr.set_int_output_round_mode(round_mode::round_down);
         std::vector<float> dst_scales = { 1 / scale };
         dst_attr.set_output_scales(0, dst_scales);
         auto dst_reorder_pd = reorder::primitive_desc(bottom.get_primitive_desc(),

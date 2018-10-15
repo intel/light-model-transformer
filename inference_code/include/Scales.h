@@ -13,6 +13,7 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 *******************************************************************************/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <iostream>
@@ -44,10 +45,12 @@ struct Scales* push_scale(struct Scales *node, string name, float scale_out) {
 }
 
 void PrintAll(struct Scales *p) {
+    printf("---- PrintAll ---->\n");
     while( p->next ) {
         p = p->next;  
-        printf( "%s: %f\n", p->name.c_str(), p->scale_out );
+        printf( "  %s: scale_out[%f]\n", p->name.c_str(), p->scale_out );
     }
+    printf("---- PrintAll ----<\n");
 }
 
 float get_scales(struct Scales *root, string name) {
