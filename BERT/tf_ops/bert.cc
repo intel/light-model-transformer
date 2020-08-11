@@ -203,11 +203,7 @@ REGISTER_OP("Bert")
     .Input("weight11_13: float")
     .Input("weight11_14: float")
     .Input("weight11_15: float")
-    .Output("berted: float")
-    .SetShapeFn([](::tensorflow::shape_inference::InferenceContext* c) {
-      c->set_output(0, c->input(0));
-      return Status::OK();
-    });
+    .Output("berted: float");
 
 #define LAYERS 12
 #define likely(x)       __builtin_expect((x),1)
