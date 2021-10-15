@@ -1,0 +1,15 @@
+# Copyright (C) 2020-2021 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+#
+
+.ycm_extra_conf.py
+compile_commands.json
+build/*
+build*/*
+*.pyc
+*.swp
+*~
+UnixMk
+**/.idea/*
+.vscode/*
+.clangd/*
