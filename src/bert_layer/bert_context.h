@@ -69,6 +69,16 @@ public:
 #endif
     }
 
+    // Set input mask
+    template <typename T>
+    void setInputMask(const T *input_mask)
+    {
+        for (int i = 0; i < maxTokenSize; ++i)
+        {
+            this->magic_value[i] = -10000.0f * (1 - input_mask[i]);
+        }
+    }
+
     int maxTokenSize;
     int hiddenSize;
     int intermediateSize;

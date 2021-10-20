@@ -2,7 +2,7 @@
 
 ## Introduction
 
-Implementation is based on the algorithm described in the article: [Bfloat16 Optimization Boosts Alibaba Cloud BERT Model Performance](https://www.intel.com/content/www/us/en/artificial-intelligence/posts/alibaba-blog.html). Onlpementation utilizes [oneDNN Library](https://github.com/oneapi-src/oneDNN).
+Implementation is based on the algorithm described in the article: [Bfloat16 Optimization Boosts Alibaba Cloud BERT Model Performance](https://www.intel.com/content/www/us/en/artificial-intelligence/posts/alibaba-blog.html). Implementation utilizes [oneDNN Library](https://github.com/oneapi-src/oneDNN).
 
 ## Building from source
 

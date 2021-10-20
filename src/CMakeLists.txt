@@ -3,3 +3,4 @@
 #
 
 add_subdirectory(bert_layer)
+add_subdirectory(tf_op)
