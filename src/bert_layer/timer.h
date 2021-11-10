@@ -8,8 +8,6 @@
 #include <string>
 #include <iostream>
 
-using namespace std;
-
 class Timer {
 public:
   Timer(const char *_name) : name(_name), pTotalTime(NULL) {
@@ -26,11 +24,11 @@ public:
     if (pTotalTime) {
       *pTotalTime += interval;
     }
-    cout << name << ": " << interval << " ms" << endl;
+    std::cout << name << ": " << interval << " ms" << std::endl;
   }
 
 private:
-  string name;
+  std::string name;
   struct timeval start;
   struct timeval end;
   float *pTotalTime;
