@@ -21,6 +21,10 @@ import tensorflow as tf
 
 import tokenization
     
+if (not tf.__version__.startswith('1')):
+    print("This script currently doesn't support tf2")
+    exit()	
+
 model_path = sys.argv[1]
 data_dir = sys.argv[2]
 op_path = sys.argv[3]

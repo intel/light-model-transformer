@@ -18,7 +18,7 @@ execute_process(COMMAND ${Python3_EXECUTABLE} -c "import tensorflow; print(tenso
 execute_process(COMMAND ${Python3_EXECUTABLE} -c "import tensorflow as tf; print(' '.join(tf.sysconfig.get_link_flags()), end='')"    OUTPUT_VARIABLE TF_LFLAGS)
 execute_process(COMMAND ${Python3_EXECUTABLE} -c "import tensorflow as tf; print(' '.join(tf.sysconfig.get_compile_flags()), end='')" OUTPUT_VARIABLE TF_CFLAGS)
 
-set(CMAKE_CXX_FLAGS "-std=c++14 ${TF_CFLAGS} ${CMAKE_CXX_FLAGS}")
+set(CMAKE_CXX_FLAGS "-std=c++14 -liomp5 ${TF_CFLAGS} ${CMAKE_CXX_FLAGS}")
 set(CMAKE_SHARED_LINKER_FLAGS "-Wl,--no-as-needed ${TF_LFLAGS} ${CMAKE_SHARED_LINKER_FLAGS}")
 include_directories(${TF_INCLUDE})
 
