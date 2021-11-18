@@ -229,7 +229,7 @@ public:
     // Do the forward computing for the whole BERT layer
     // input: maxTokenSize x hidden_size
     // actualTokens: #tokens = maxTokenSize - padded_tokens
-    hpj::Matrix<float> &forward(hpj::Matrix<float> &inputBuffer, int actualTokens) {
+    hpj::Matrix<float> &forward(hpj::Matrix<float> &inputBuffer) {
         // Query, Key, Value computed together
         //printf("qkvWeight, rows = %d, cols = %d\n", qkvWeight.Rows(), qkvWeight.Cols());
 
@@ -242,9 +242,6 @@ public:
         hpj::Matrix<float> query(ctx.qkvMatMul, 0, ctx.maxTokenSize, 0, hiddenSize);
         hpj::Matrix<float> key(ctx.qkvMatMul, ctx.maxTokenSize, ctx.maxTokenSize, 0, hiddenSize);
         hpj::Matrix<float> value(ctx.qkvMatMul, 2*ctx.maxTokenSize, ctx.maxTokenSize, 0, hiddenSize);
-
-        for (int i = 0; i < actualTokens; ++i) { ctx.magic_value[i] = 0; }
-        for (int i = actualTokens; i < maxTokenSize; ++i) { ctx.magic_value[i] = -10000; }
 
         batchMatMul_dnnl_1_with_scale_bias(query, key, ctx.qk_result);
         //computeSoftmax_only(actualTokens);
@@ -797,7 +794,7 @@ private:
         
         float *pBias = ctx.magic_value;
 
-        int scale = 0.125f;
+        float scale = 0.125f;
 
         BatchMatMul_with_stride_bias(eng, eng_stream, pA, pB, pC, pBias, m, n, k, lda, ldb, ldc, 
                             batch_stride_a, batch_stride_b, batch_stride_c, batch_stride_bias, 

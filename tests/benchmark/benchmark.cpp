@@ -132,6 +132,10 @@ void benchmarkMB1(int tokenSize, LayerWeights *weights, hpj::Matrix<float> &inpu
                                weights[i].gamma2, weights[i].beta2);
   }
 
+  std::vector<int> inputMask(ctx.maxTokenSize, 0);
+  for (int i = 0; i < ctx.maxTokenSize; ++i) inputMask[i] = 1;
+  ctx.setInputMask(inputMask.data());
+
   float totalTime = 0;
   for (int i = 0; i < warmupTimes + benchmarkTimes; ++i)
   {
@@ -142,7 +146,7 @@ void benchmarkMB1(int tokenSize, LayerWeights *weights, hpj::Matrix<float> &inpu
 
     for (int i = 0; i < LAYERS; ++i)
     {
-      hpj::Matrix<float> &out = bert_layers[i]->forward(*m_data, tokenSize);
+      hpj::Matrix<float> &out = bert_layers[i]->forward(*m_data);
       m_data = &out;
     }
 
@@ -160,7 +164,7 @@ void benchmarkMB1(int tokenSize, LayerWeights *weights, hpj::Matrix<float> &inpu
 
     for (int i = 0; i < LAYERS; ++i)
     {
-      hpj::Matrix<float> &out = bert_layers[i]->forward(*m_data, tokenSize);
+      hpj::Matrix<float> &out = bert_layers[i]->forward(*m_data);
       m_data = &out;
     }
   }

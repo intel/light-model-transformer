@@ -99,7 +99,7 @@ public:
         ctx.setInputMask(masks);
         for (int i = 0; i < this->layers; ++i)
         {
-            hpj::Matrix<float> &out = this->bert_layers[i]->forward(*pinput, 0);
+            hpj::Matrix<float> &out = this->bert_layers[i]->forward(*pinput);
             pinput = &out;
         }
 
