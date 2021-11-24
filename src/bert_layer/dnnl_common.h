@@ -6,30 +6,9 @@
 #define __DNNL_COMMON__
 
 #include "dnnl.hpp"
-#include "dnnl_debug.h"
 
-#include <iostream>
 #include <string>
-#include <sstream>
-#include <iomanip>
-#include <chrono>
-
-/*
-#if defined(ONEDNN_2_2)
-#include "common/bfloat16.hpp"
-extern "C" {
-dnnl_status_t DNNL_API dnnl_gemm_bf16bf16f32(char transa, char transb,
-         dnnl_dim_t M, dnnl_dim_t N, dnnl_dim_t K, float alpha,
-         const dnnl::impl::bfloat16_t *A, dnnl_dim_t lda,
-         const dnnl::impl::bfloat16_t *B, dnnl_dim_t ldb, float beta,
-         float *C, dnnl_dim_t ldc);
-}
-#elif defined(ONEDNN_1_3)
-#include "bfloat16.hpp"
-#endif
-
-typedef dnnl::impl::bfloat16_t bfloat16;
-*/
+#include <sstream> // TODO(rbogdano): Delete this include after cleanup commit merge.
 
 using bfloat16 = std::uint16_t;
 
@@ -62,6 +41,14 @@ void del_dnnl(void)
     }
 
     for (map_mm_primd_t::iterator iter = g_mm_prim_desc.begin(); iter != g_mm_prim_desc.end(); ++iter) {
+      delete iter->second;
+    }
+
+    for (map_bn_primd_t::iterator iter = g_bn_prim_desc.begin(); iter != g_bn_prim_desc.end(); ++iter) {
+      delete iter->second;
+    }
+
+    for (map_ln_primd_t::iterator iter = g_ln_prim_desc.begin(); iter != g_ln_prim_desc.end(); ++iter) {
       delete iter->second;
     }
 
