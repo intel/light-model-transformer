@@ -8,8 +8,7 @@
 #include "dnnl_common.h"
 
 template <typename T_input>
-bool Softmax(engine eng, stream stm, T_input* input, int m, int n)
-{
+bool Softmax(engine eng, stream stm, T_input* input, int m, int n) {
     memory::dims src_tz = {m, n};
     memory::data_type src_dt = memory::data_type::f32;
 
@@ -26,13 +25,6 @@ bool Softmax(engine eng, stream stm, T_input* input, int m, int n)
     auto src_memory = user_src_memory;
 
     if (softmax_pd.src_desc() != user_src_memory.get_desc()) {
-        #if 0
-        static int index = 0;
-        index++;
-        if (index < 2)
-            std::cout << "softmax: reorder user_src_memory !!!" << std::endl;
-        #endif
-
         src_memory = memory(softmax_pd.src_desc(), eng);
         auto reorder_src = reorder(user_src_memory, src_memory);
         reorder_src.execute(stm, {
