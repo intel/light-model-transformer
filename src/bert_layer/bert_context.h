@@ -22,14 +22,10 @@ public:
         resultBuffer1.Resize(maxTokenSize, hiddenSize);
         resultBuffer2.Resize(maxTokenSize, hiddenSize);
         intermediateBuffer.Resize(maxTokenSize, intermediateSize);
-        //intermediateBuffer_bf16.Resize(maxTokenSize, intermediateSize);
 
         qk_resultBuffer.Resize(12*maxTokenSize, maxTokenSize);
-        //qk_resultBuffer.Resize(maxTokenSize, maxTokenSize*12);
 
-        
         for (int i = 0; i < 12; ++i) {
-            //qk_result[i] = (float *)aligned_alloc(64, sizeof(float) * maxTokenSize * maxTokenSize);
             qk_result[i] = qk_resultBuffer.Data() + i * maxTokenSize * maxTokenSize;
             exp_buffer[i] = (float *)aligned_alloc(64, sizeof(float) * maxTokenSize);
         }
@@ -52,9 +48,7 @@ public:
 
     virtual ~BertContext() {
         for (int i = 0; i < 12; ++i) {
-            //free(qk_result[i]);
             free(exp_buffer[i]);
-            //qk_result[i] = NULL;
             exp_buffer[i] = NULL;
         }
         free(magic_value);
@@ -89,7 +83,6 @@ public:
     hpj::Matrix<float> resultBuffer1, resultBuffer2;
     // Buffer to store the result of intermediate
     hpj::Matrix<float> intermediateBuffer;
-    //hpj::Matrix<bfloat16> intermediateBuffer_bf16;
     // Store the BatchMatMul result of query and key
     float *qk_result[12];
     // Store the result of exp for each line
