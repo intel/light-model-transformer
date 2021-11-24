@@ -96,11 +96,6 @@ public:
             return;
         }
         if (cols > 16) {
-            //int skip = (16 - cols % 16) % 16;
-            //stride_ = cols + skip;
-            //if (stride_ % 256 == 0) {
-            //    stride_ += 4;
-            //}
             stride_ = cols;
         } else { // for narrow matrix, not padding any more
             stride_ = cols;
@@ -146,14 +141,12 @@ public:
         return stride_;
     }
     T* Row(const int idx) {
-        //assert(idx < rows_ && idx >= 0);
         return data_ + stride_ * idx;
     }
     const T* Row(const int idx) const {
         return data_ + stride_ * idx;
     }
     T& operator()(int r, int c) { 
-        //assert(r >= 0 && r < rows_ && c >= 0 && c < cols_);
         return *(data_ + r * stride_ + c );
     }
 };
