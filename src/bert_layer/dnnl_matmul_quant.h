@@ -55,6 +55,9 @@ bool MatMul_with_erf_quant(engine eng, stream stm, T_input* input, T_wei* weight
         primitive_attr attr;
         post_ops po;
 
+        const int dst_mask = 0;
+        attr.set_output_scales(dst_mask, {1/(src_scale * weight_scale)});
+
         po.append_eltwise(
             1.0f, //scale
             dnnl::algorithm::eltwise_gelu_erf,
@@ -90,14 +93,14 @@ bool MatMul_with_erf_quant(engine eng, stream stm, T_input* input, T_wei* weight
 
     const int src_mask = 0;
     const int weight_mask = 0;
-    const int dst_mask = 0;  
+    const int bias_mask = 0;
 
     primitive_attr src_attr;
     primitive_attr weights_attr;
-    primitive_attr dst_attr;
+    primitive_attr bias_attr;
     src_attr.set_output_scales(src_mask, {src_scale});
     weights_attr.set_output_scales(weight_mask, {weight_scale});
-    dst_attr.set_output_scales(dst_mask, {1/(src_scale * weight_scale)});
+    bias_attr.set_output_scales(bias_mask, {src_scale * weight_scale});
 
     auto src_memory = user_src_memory;
     auto weights_memory = &user_weights_memory;
@@ -129,13 +132,13 @@ bool MatMul_with_erf_quant(engine eng, stream stm, T_input* input, T_wei* weight
         }
     }
 
-    if (prim_desc.bias_desc() != user_bias_memory.get_desc()) {
+    {
         std::string prim_bias_key = prim_key+"-bias";
         auto it_memory_created = g_memory.find(prim_bias_key);
 
         if (it_memory_created == g_memory.end()) {
             bias_memory = new memory(prim_desc.bias_desc(), eng);
-            auto reorder_bias = reorder(user_bias_memory, *bias_memory);
+            auto reorder_bias = reorder(user_bias_memory, *bias_memory, bias_attr);
             reorder_bias.execute(stm, {
                 { DNNL_ARG_FROM, user_bias_memory },
                 { DNNL_ARG_TO, *bias_memory } });
@@ -158,11 +161,6 @@ bool MatMul_with_erf_quant(engine eng, stream stm, T_input* input, T_wei* weight
         std::cout << "MatMul_with_erf: execute error, prim_key = " << prim_key << std::endl;
         return false;
     }
-
-    auto reorder_dst = reorder(dst_memory, dst_memory, dst_attr);
-    reorder_dst.execute(stm, {
-            { DNNL_ARG_FROM, dst_memory },
-            { DNNL_ARG_TO, dst_memory } }); 
 
     stm.wait();
     return true;
@@ -209,6 +207,9 @@ bool MatMul_with_sum_quant(engine eng, stream stm, T_input* input, T_wei* weight
         primitive_attr attr;
         post_ops po;
 
+        const int dst_mask = 0;
+        attr.set_output_scales(dst_mask, {1/(src_scale * weight_scale)});
+
         po.append_sum(beta);
         attr.set_post_ops(po);
 
@@ -239,14 +240,14 @@ bool MatMul_with_sum_quant(engine eng, stream stm, T_input* input, T_wei* weight
 
     const int src_mask = 0;
     const int weight_mask = 0;
-    const int dst_mask = 0;  
+    const int bias_mask = 0;
 
     primitive_attr src_attr;
     primitive_attr weights_attr;
-    primitive_attr dst_attr;
+    primitive_attr bias_attr;
     src_attr.set_output_scales(src_mask, {src_scale});
     weights_attr.set_output_scales(weight_mask, {weight_scale});
-    dst_attr.set_output_scales(dst_mask, {1/(src_scale * weight_scale)});
+    bias_attr.set_output_scales(bias_mask, {src_scale * weight_scale});
 
     auto src_memory = user_src_memory;
     auto weights_memory = &user_weights_memory;
@@ -278,13 +279,13 @@ bool MatMul_with_sum_quant(engine eng, stream stm, T_input* input, T_wei* weight
         }
     }
 
-    if (prim_desc.bias_desc() != user_bias_memory.get_desc()) {
+    {
         std::string prim_bias_key = prim_key+"-bias";
         auto it_memory_created = g_memory.find(prim_bias_key);
 
         if (it_memory_created == g_memory.end()) {
             bias_memory = new memory(prim_desc.bias_desc(), eng);
-            auto reorder_bias = reorder(user_bias_memory, *bias_memory);
+            auto reorder_bias = reorder(user_bias_memory, *bias_memory, bias_attr);
             reorder_bias.execute(stm, {
                 { DNNL_ARG_FROM, user_bias_memory },
                 { DNNL_ARG_TO, *bias_memory } });
@@ -307,11 +308,6 @@ bool MatMul_with_sum_quant(engine eng, stream stm, T_input* input, T_wei* weight
         std::cout << "MatMul_with_sum: execute error, prim_key = " << prim_key << std::endl;
         return false;
     }
-
-    auto reorder_dst = reorder(dst_memory, dst_memory, dst_attr);
-    reorder_dst.execute(stm, {
-            { DNNL_ARG_FROM, dst_memory },
-            { DNNL_ARG_TO, dst_memory } }); 
 
     stm.wait();
     return true;
@@ -342,6 +338,10 @@ bool MatMul_with_bias_quant(engine eng, stream stm, T_input* input, T_wei* weigh
     memory::data_type bias_dt = memory::data_type::f32;
     memory::data_type dst_dt = memory::data_type::f32;
 
+    const int dst_mask = 0;
+    primitive_attr dst_attr;
+    dst_attr.set_output_scales(dst_mask, {1/(src_scale * weight_scale)});
+
     auto it_prim_created = g_prim.find(prim_key);
     if (it_prim_created == g_prim.end())
     {
@@ -352,7 +352,7 @@ bool MatMul_with_bias_quant(engine eng, stream stm, T_input* input, T_wei* weigh
 
         auto desc = matmul::desc(src_md, weights_md, bias_md, dst_md);
 
-        auto *prim_desc = new matmul::primitive_desc(desc, eng);
+        auto *prim_desc = new matmul::primitive_desc(desc, dst_attr, eng);
         auto *prim = new matmul(*prim_desc);
 
         g_prim.insert(std::pair<std::string, primitive *>(prim_key, prim));
@@ -379,14 +379,14 @@ bool MatMul_with_bias_quant(engine eng, stream stm, T_input* input, T_wei* weigh
 
     const int src_mask = 0;
     const int weight_mask = 0;
-    const int dst_mask = 0;  
+    const int bias_mask = 0;
 
     primitive_attr src_attr;
     primitive_attr weights_attr;
-    primitive_attr dst_attr;
+    primitive_attr bias_attr;
     src_attr.set_output_scales(src_mask, {src_scale});
     weights_attr.set_output_scales(weight_mask, {weight_scale});
-    dst_attr.set_output_scales(dst_mask, {1/(src_scale * weight_scale)});
+    bias_attr.set_output_scales(bias_mask, {src_scale * weight_scale});
 
     auto src_memory = user_src_memory;
     auto weights_memory = &user_weights_memory;
@@ -418,13 +418,13 @@ bool MatMul_with_bias_quant(engine eng, stream stm, T_input* input, T_wei* weigh
         }
     }
 
-    if (prim_desc.bias_desc() != user_bias_memory.get_desc()) {
+    {
         std::string prim_bias_key = prim_key+"-bias";
         auto it_memory_created = g_memory.find(prim_bias_key);
 
         if (it_memory_created == g_memory.end()) {
             bias_memory = new memory(prim_desc.bias_desc(), eng);
-            auto reorder_bias = reorder(user_bias_memory, *bias_memory);
+            auto reorder_bias = reorder(user_bias_memory, *bias_memory, bias_attr);
             reorder_bias.execute(stm, {
                 { DNNL_ARG_FROM, user_bias_memory },
                 { DNNL_ARG_TO, *bias_memory } });
@@ -447,11 +447,6 @@ bool MatMul_with_bias_quant(engine eng, stream stm, T_input* input, T_wei* weigh
         std::cout << "MatMul_with_bias: execute error, prim_key = " << prim_key << std::endl;
         return false;
     }
-
-    auto reorder_dst = reorder(dst_memory, dst_memory, dst_attr);
-    reorder_dst.execute(stm, {
-            { DNNL_ARG_FROM, dst_memory },
-            { DNNL_ARG_TO, dst_memory } });    
 
     stm.wait();
     return true;

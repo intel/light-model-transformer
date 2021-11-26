@@ -133,13 +133,13 @@ public:
         outWScale = 127/max_outputWeight;
 
     #ifndef dynamic_quant
-        float qkv_src_max = 100.f;
+        float qkv_src_max = 35.f;
 
         qkv_SrcScale = 127/qkv_src_max;
 
-        float attentionout_src_max = 100.f;
+        float attentionout_src_max = 7.f;
         float intermediate_src_max = 100.f;
-        float out_src_max = 100.f;
+        float out_src_max = 150.f;
 
         attentionout_SrcScale = 127/attentionout_src_max;
         intermediate_SrcScale = 127/intermediate_src_max;
@@ -195,7 +195,10 @@ public:
             
 #ifdef QUANT_INT8
 
-    #ifdef dynamic_quant
+    // #ifdef dynamic_quant
+    // TODO(rfsaliev) analyze accuracy effect of the dynamic quantization here
+    //                improve max_matrix() performance if dyn quant is unavoidable
+    #if 1
         float out_src_max = max_matrix(ctx.intermediateBuffer);
         out_SrcScale = 127/out_src_max;
     #endif
