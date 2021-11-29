@@ -1,0 +1,25 @@
+# Copyright (C) 2021 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+#
+
+import setuptools
+
+import os
+
+with open(os.path.join('${CMAKE_CURRENT_SOURCE_DIR}', 'README.md'), 'r', encoding='utf-8') as fh:
+    long_description = fh.read()
+
+setuptools.setup(
+    name='model-modifier',
+    version='${PROJECT_VERSION}',
+    description='TensorFlow model modification tools',
+    long_description=long_description,
+    long_description_content_type='text/markdown',
+    package_dir={'': '${CMAKE_CURRENT_SOURCE_DIR}'},
+    packages=setuptools.find_packages(where='${CMAKE_CURRENT_SOURCE_DIR}'),
+    python_requires='>=3.6.9',
+    entry_points={
+        'console_scripts': ['extract-pattern=model_modifier.extract_pattern:main',
+            'replace-pattern=model_modifier.replace_pattern:main']
+    }
+)
