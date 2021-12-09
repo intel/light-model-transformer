@@ -59,7 +59,8 @@ public:
                     const float *_gamma1, const float *_beta1,
                     const float *_intermediateWeight, const float *_intermediateBias,
                     const float *_outputWeight, const float *_outputBias,
-                    const float *_gamma2, const float *_beta2) {
+                    const float *_gamma2, const float *_beta2,
+                    const float minmax[8]) {
         // Merged weights, dimension is like: 768*(768*3)
         hpj::Matrix<float> tmp;
         
@@ -133,17 +134,18 @@ public:
         outWScale = 127/max_outputWeight;
 
     #ifndef dynamic_quant
-        float qkv_src_max = 35.f;
+        float qkv_src_max = minmax[1] - minmax[0];
 
         qkv_SrcScale = 127/qkv_src_max;
+
 
         float attentionout_src_max = 7.f;
         float intermediate_src_max = 100.f;
         float out_src_max = 150.f;
 
-        attentionout_SrcScale = 127/attentionout_src_max;
-        intermediate_SrcScale = 127/intermediate_src_max;
-        out_SrcScale = 127/out_src_max;
+        attentionout_SrcScale = 127 / (minmax[3] - minmax[2]);
+        intermediate_SrcScale =  127 / (minmax[5] - minmax[4]);
+        out_SrcScale = 127 / (minmax[7] - minmax[6]);
     #endif
 #endif
     }
@@ -198,7 +200,7 @@ public:
     // #ifdef dynamic_quant
     // TODO(rfsaliev) analyze accuracy effect of the dynamic quantization here
     //                improve max_matrix() performance if dyn quant is unavoidable
-    #if 1
+    #ifdef dynamic_quant
         float out_src_max = max_matrix(ctx.intermediateBuffer);
         out_SrcScale = 127/out_src_max;
     #endif
