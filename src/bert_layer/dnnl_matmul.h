@@ -7,6 +7,12 @@
 
 #include "dnnl_common.h"
 
+#include <sstream>
+#include <string>
+#include <iostream>
+#include <type_traits>
+
+
 #define src_format dnnl::memory::format_tag::ab
 #define bias_format dnnl::memory::format_tag::ab
 #define dst_format dnnl::memory::format_tag::ab

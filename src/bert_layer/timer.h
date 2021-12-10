@@ -4,9 +4,11 @@
 
 #ifndef __TIMER_H_
 #define __TIMER_H_
-#include <sys/time.h>
+
+#include <sys/time.h> // TODO(rfsaliev): Use standard C++ timers rather than Linux specific
 #include <string>
 #include <iostream>
+
 
 class Timer {
 public:

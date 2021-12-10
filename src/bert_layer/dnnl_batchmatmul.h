@@ -7,6 +7,12 @@
 
 #include "dnnl_common.h"
 
+#include <string>
+#include <sstream>
+#include <iostream>
+#include <type_traits>
+
+
 #define batch_src_format dnnl::memory::format_tag::abc
 #define batch_bias_format dnnl::memory::format_tag::abc
 #define batch_dst_format dnnl::memory::format_tag::abc

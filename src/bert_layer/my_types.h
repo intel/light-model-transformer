@@ -4,7 +4,11 @@
 
 #ifndef __HPJ_MATRIX_H_
 #define __HPJ_MATRIX_H_
-#include <assert.h>
+
+#include <cassert>
+#include <new>
+#include <cstdlib>
+
 
 namespace hpj {
 

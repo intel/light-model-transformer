@@ -5,6 +5,12 @@
 #ifndef BERT_CONTEXT_H_
 #define BERT_CONTEXT_H_
 
+#include "my_types.h"
+
+#include <cstdlib>
+#include <omp.h>
+
+
 #define SEPARATE_QKV
 
 class BertContext {

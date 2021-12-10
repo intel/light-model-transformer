@@ -7,6 +7,12 @@
 
 #include "dnnl_common.h"
 
+#include <string>
+#include <iostream>
+#include <sstream>
+#include <type_traits>
+
+
 template <typename T_input, typename T_gamma, typename T_beta>
 bool LayerNorm_with_gamma_beta(dnnl::engine eng, dnnl::stream stm, T_input* input, T_gamma* gamma, T_beta* beta, int m, int n) {
     char type_input = (std::is_floating_point<T_input>::value) ? 'f' : 'b';

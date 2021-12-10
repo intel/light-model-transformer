@@ -5,19 +5,18 @@
 #ifndef BERT_LAYER_H_
 #define BERT_LAYER_H_
 
-#include <string.h>
-#include <math.h>
-#include <omp.h>
-#include <iostream>
-
 #include "my_types.h"
-
 #include "dnnl_matmul.h"
 #include "bert_context.h"
 #include "dnnl_batchmatmul.h"
 #include "dnnl_softmax.h"
 #include "dnnl_layernorm.h"
 #include "dnnl_matmul_quant.h"
+
+#include <cstring>
+#include <cmath>
+#include <cassert>
+
 
 #define QUANT_INT8
 //#define dynamic_quant

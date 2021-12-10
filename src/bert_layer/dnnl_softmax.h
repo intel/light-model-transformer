@@ -7,6 +7,7 @@
 
 #include "dnnl_common.h"
 
+
 template <typename T_input>
 bool Softmax(dnnl::engine eng, dnnl::stream stm, T_input* input, int m, int n) {
     dnnl::memory::dims src_tz = {m, n};

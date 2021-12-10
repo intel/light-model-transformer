@@ -8,7 +8,8 @@
 #include "dnnl.hpp"
 
 #include <string>
-#include <sstream> // TODO(rbogdano): Delete this include after cleanup commit merge.
+#include <unordered_map>
+
 
 using bfloat16 = std::uint16_t;
 
