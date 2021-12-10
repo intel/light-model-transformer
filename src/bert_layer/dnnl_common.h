@@ -12,16 +12,15 @@
 
 using bfloat16 = std::uint16_t;
 
-using namespace dnnl;
 
-typedef std::unordered_map<std::string, memory*> map_mem_t;
-typedef std::unordered_map<std::string, inner_product_forward::primitive_desc*> map_ip_primd_t;
-typedef std::unordered_map<std::string, matmul::primitive_desc*> map_mm_primd_t;
-typedef std::unordered_map<std::string, batch_normalization_forward::primitive_desc*> map_bn_primd_t;
-typedef std::unordered_map<std::string, layer_normalization_forward::primitive_desc*> map_ln_primd_t;
-typedef std::unordered_map<std::string, primitive*> map_prim_t;
+typedef std::unordered_map<std::string, dnnl::memory*> map_mem_t;
+typedef std::unordered_map<std::string, dnnl::inner_product_forward::primitive_desc*> map_ip_primd_t;
+typedef std::unordered_map<std::string, dnnl::matmul::primitive_desc*> map_mm_primd_t;
+typedef std::unordered_map<std::string, dnnl::batch_normalization_forward::primitive_desc*> map_bn_primd_t;
+typedef std::unordered_map<std::string, dnnl::layer_normalization_forward::primitive_desc*> map_ln_primd_t;
+typedef std::unordered_map<std::string, dnnl::primitive*> map_prim_t;
 
-engine eng(engine::kind::cpu, 0);
+dnnl::engine eng(dnnl::engine::kind::cpu, 0);
 
 map_mem_t g_memory;
 map_ip_primd_t g_ip_prim_desc;
