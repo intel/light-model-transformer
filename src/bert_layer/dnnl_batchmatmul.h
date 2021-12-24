@@ -29,17 +29,8 @@ bool BatchMatMul_with_stride_bias(dnnl::engine eng, dnnl::stream stm, T_input* i
         int m, int n, int k, int lda, int ldb, int ldc, 
         int batch_stride_a, int batch_stride_b, int batch_stride_c, int batch_stride_bias,
         int batch_src, int batch_weights, int batch_dst, int batch_bias, float scale, bool wTrans) {
-    char type_input = (std::is_floating_point<T_input>::value) ? 'f' : 'b';
-    char type_weights = (std::is_floating_point<T_wei>::value) ? 'f' : 'b';
-    char type_bias = (std::is_floating_point<T_bias>::value) ? 'f' : 'b';
-    char type_output = (std::is_floating_point<T_output>::value) ? 'f' : 'b';
-
-    const void *address = static_cast<const void*>(weight);
-
-    std::stringstream weights_addr;
-    weights_addr << "BatchMatMul_with_stride_bias-" << type_input << type_weights << type_output << type_bias \
-                 << '-' << m << '-' << n << '-' << k << '-' << address;
-    std::string prim_key = weights_addr.str();
+            
+    auto prim_key = KeyConstruction(input,weight,output,m,n,k,"BatchMatMul_with_stride_bias",bias);
 
     dnnl::memory::dims src_tz = { batch_src, m, k };
     dnnl::memory::dims weights_tz = {batch_weights, k, n };
@@ -170,16 +161,8 @@ template <typename T_input, typename T_wei, typename T_output>
 bool BatchMatMul_with_stride(dnnl::engine eng, dnnl::stream stm, T_input* input, T_wei* weight, T_output* output, 
         int m, int n, int k, int lda, int ldb, int ldc, 
         int batch_stride_a, int batch_stride_b, int batch_stride_c, bool wTrans, int batch) {
-    char type_input = (std::is_floating_point<T_input>::value) ? 'f' : 'b';
-    char type_weights = (std::is_floating_point<T_wei>::value) ? 'f' : 'b';
-    char type_output = (std::is_floating_point<T_output>::value) ? 'f' : 'b';
-
-    const void *address = static_cast<const void*>(weight);
-
-    std::stringstream weights_addr;
-    weights_addr << "BatchMatMul_with_stride-" << type_input << type_weights << type_output \
-                 << '-' << m << '-' << n << '-' << k << '-' << address;
-    std::string prim_key = weights_addr.str();
+    
+    auto prim_key = KeyConstruction(input,weight,output,m,n,k,"BatchMatMul_with_stride");
 
     dnnl::memory::dims src_tz = { batch, m, k };
     dnnl::memory::dims weights_tz = {batch, k, n };

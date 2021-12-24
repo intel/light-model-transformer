@@ -15,16 +15,8 @@
 
 template <typename T_input, typename T_gamma, typename T_beta>
 bool LayerNorm_with_gamma_beta(dnnl::engine eng, dnnl::stream stm, T_input* input, T_gamma* gamma, T_beta* beta, int m, int n) {
-    char type_input = (std::is_floating_point<T_input>::value) ? 'f' : 'b';
-    char type_gamma = (std::is_floating_point<T_gamma>::value) ? 'f' : 'b';
-    char type_beta = (std::is_floating_point<T_beta>::value) ? 'f' : 'b';
-
-    const void *address = static_cast<const void*>(gamma);
-
-    std::stringstream gamma_addr;
-    gamma_addr << "LayerNorm_with_gamma_beta-" << type_input << type_gamma << type_beta \
-                 << '-' << m << '-' << n << '-' << address;
-    std::string prim_key = gamma_addr.str();
+    
+    auto prim_key = KeyConstruction(input,gamma,beta,m,n,"LayerNorm_with_gamma_beta");
 
     dnnl::memory::dims src_tz = {m, n};
     dnnl::memory::dims gamma_tz = {1, n};

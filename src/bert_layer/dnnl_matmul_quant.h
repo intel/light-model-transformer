@@ -26,18 +26,9 @@
 template <typename T_input, typename T_wei, typename T_bias, typename T_output>
 bool MatMul_with_erf_quant(dnnl::engine eng, dnnl::stream stm, T_input* input, T_wei* weight, T_bias* bias, T_output* output, 
         int m, int n, int k, bool wTrans, float src_scale, float weight_scale) {
-    char type_input = (std::is_floating_point<T_input>::value) ? 'f' : 'b';
-    char type_weights = (std::is_floating_point<T_wei>::value) ? 'f' : 'b';
-    char type_bias = (std::is_floating_point<T_bias>::value) ? 'f' : 'b';
-    char type_output = (std::is_floating_point<T_output>::value) ? 'f' : 'b';
-
-    const void *address = static_cast<const void*>(weight);
-
-    std::stringstream weights_addr;
-    weights_addr << "MatMul_with_erf_quant-" << type_input << type_weights << type_bias << type_output \
-                 << '-' << m << '-' << n << '-' << k << '-' << address;
-    std::string prim_key = weights_addr.str();
-
+	
+    auto prim_key = KeyConstruction(input,weight,output,m,n,k,"MatMul_with_erf_quant",bias);
+	
     dnnl::memory::dims src_tz = { m, k };
     dnnl::memory::dims weights_tz = { k, n };
     dnnl::memory::dims bias_tz = { 1, n };
@@ -176,17 +167,8 @@ bool MatMul_with_erf_quant(dnnl::engine eng, dnnl::stream stm, T_input* input, T
 template <typename T_input, typename T_wei, typename T_bias, typename T_output>
 bool MatMul_with_sum_quant(dnnl::engine eng, dnnl::stream stm, T_input* input, T_wei* weight, T_bias* bias, T_output* output, 
         int m, int n, int k, bool wTrans, float src_scale, float weight_scale) {
-    char type_input = (std::is_floating_point<T_input>::value) ? 'f' : 'b';
-    char type_weights = (std::is_floating_point<T_wei>::value) ? 'f' : 'b';
-    char type_bias = (std::is_floating_point<T_bias>::value) ? 'f' : 'b';
-    char type_output = (std::is_floating_point<T_output>::value) ? 'f' : 'b';
-
-    const void *address = static_cast<const void*>(weight);
-
-    std::stringstream weights_addr;
-    weights_addr << "MatMul_with_sum-" << type_input << type_weights << type_bias << type_output \
-                 << '-' << m << '-' << n << '-' << k << '-' << address;
-    std::string prim_key = weights_addr.str();
+    
+	auto prim_key = KeyConstruction(input,weight,output,m,n,k,"MatMul_with_sum",bias);
 
     dnnl::memory::dims src_tz = { m, k };
     dnnl::memory::dims weights_tz = {k, n };
@@ -322,17 +304,8 @@ bool MatMul_with_sum_quant(dnnl::engine eng, dnnl::stream stm, T_input* input, T
 template <typename T_input, typename T_wei, typename T_bias, typename T_output>
 bool MatMul_with_bias_quant(dnnl::engine eng, dnnl::stream stm, T_input* input, T_wei* weight, T_bias* bias, T_output* output, 
         int m, int n, int k, bool wTrans, float src_scale, float weight_scale) {
-    char type_input = (std::is_floating_point<T_input>::value) ? 'f' : 'b';
-    char type_weights = (std::is_floating_point<T_wei>::value) ? 'f' : 'b';
-    char type_bias = (std::is_floating_point<T_bias>::value) ? 'f' : 'b';
-    char type_output = (std::is_floating_point<T_output>::value) ? 'f' : 'b';
-
-    const void *address = static_cast<const void*>(weight);
-
-    std::stringstream weights_addr;
-    weights_addr << "MatMul_with_bias-" << type_input << type_weights << type_bias << type_output \
-                 << '-' << m << '-' << n << '-' << k << '-' << address;
-    std::string prim_key = weights_addr.str();
+			
+    auto prim_key = KeyConstruction(input,weight,output,m,n,k,"MatMul_with_bias",bias);
 
     dnnl::memory::dims src_tz = { m, k };
     dnnl::memory::dims weights_tz = {k, n };
