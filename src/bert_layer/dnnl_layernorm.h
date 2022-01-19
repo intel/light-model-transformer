@@ -11,6 +11,7 @@
 #include <iostream>
 #include <sstream>
 #include <type_traits>
+#include <memory>
 
 
 template <typename T_input, typename T_gamma, typename T_beta>
@@ -35,11 +36,11 @@ bool LayerNorm_with_gamma_beta(dnnl::engine eng, dnnl::stream stm, T_input* inpu
                 dnnl::normalization_flags::use_scale | dnnl::normalization_flags::use_shift );
 
         // Create primitive descriptor.
-        auto *prim_desc = new dnnl::layer_normalization_forward::primitive_desc(bnorm_d, eng);
-        auto *prim = new dnnl::layer_normalization_forward(*prim_desc);
+        auto prim_desc = dnnl::layer_normalization_forward::primitive_desc(bnorm_d, eng);
+        auto prim = dnnl::layer_normalization_forward(prim_desc);
 
-        g_prim.insert(std::pair<std::string, dnnl::primitive *>(prim_key, prim));
-        g_ln_prim_desc.insert(std::pair<std::string, dnnl::layer_normalization_forward::primitive_desc *>(prim_key, prim_desc));
+        g_prim.emplace(prim_key, prim);
+        g_ln_prim_desc.emplace(prim_key, prim_desc);
     }
 
     auto user_src_md = dnnl::memory::desc(src_tz, dnnl::memory::data_type::f32, dnnl::memory::format_tag::nc);
@@ -55,7 +56,7 @@ bool LayerNorm_with_gamma_beta(dnnl::engine eng, dnnl::stream stm, T_input* inpu
         std::cout << "batchnorm error: can find g_ln_prim_desc = " << prim_key << std::endl;
         return false;
     }
-    dnnl::layer_normalization_forward::primitive_desc prim_desc = *it_prim_desc_created->second;
+    auto prim_desc = it_prim_desc_created->second;
 
     auto src_memory = user_src_memory;
     auto gamma_memory = &user_gamma_memory;
@@ -71,7 +72,7 @@ bool LayerNorm_with_gamma_beta(dnnl::engine eng, dnnl::stream stm, T_input* inpu
 
     it_prim_created = g_prim.find(prim_key);
     if (it_prim_created != g_prim.end()) {
-        it_prim_created->second->execute(stm, {
+        it_prim_created->second.execute(stm, {
             { DNNL_ARG_SRC, src_memory },
             { DNNL_ARG_SCALE, *gamma_memory },
             { DNNL_ARG_SHIFT, *beta_memory },

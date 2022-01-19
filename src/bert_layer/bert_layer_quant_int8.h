@@ -16,6 +16,7 @@
 #include <cstring>
 #include <cmath>
 #include <cassert>
+#include <vector>
 
 
 #define QUANT_INT8
@@ -159,7 +160,7 @@ public:
 #else
         sgemm_with_bias_qkv(inputBuffer, qkvWeight, ctx.qkvMatMul, qkvBias);
 #endif
-        
+
         hpj::Matrix<float> query(ctx.qkvMatMul, 0, ctx.maxTokenSize, 0, hiddenSize);
         hpj::Matrix<float> key(ctx.qkvMatMul, ctx.maxTokenSize, ctx.maxTokenSize, 0, hiddenSize);
         hpj::Matrix<float> value(ctx.qkvMatMul, 2*ctx.maxTokenSize, ctx.maxTokenSize, 0, hiddenSize);
@@ -442,7 +443,7 @@ private:
         sgemm_with_erf_dst_bf16(input, intermediateWeight, output, intermediateBias);
     }
 
-    void batchMatMul_dnnl_1_with_scale_bias(hpj::Matrix<float> &A, hpj::Matrix<float> &B, float *c_array[12]){
+    void batchMatMul_dnnl_1_with_scale_bias(hpj::Matrix<float> &A, hpj::Matrix<float> &B, std::vector<float*> &c_array){
         bool wTrans = true;
         int m = A.Rows();  // maxTokenSize = 128
         int k = 64;        // 12 * 64 = 768
@@ -467,7 +468,7 @@ private:
         float *pB = B.Data();
         float *pC = c_array[0];
         
-        float *pBias = ctx.magic_value;
+        float *pBias = ctx.magic_value.get();
 
         float scale = 0.125f;
 
@@ -476,7 +477,7 @@ private:
                             batch_src, batch_weights, batch_dst, batch_bias, scale, wTrans);
     }
 
-    void batchMatMul_dnnl_2(float *a_array[12], hpj::Matrix<float> &B, hpj::Matrix<float> &C){
+    void batchMatMul_dnnl_2(std::vector<float*> &a_array, hpj::Matrix<float> &B, hpj::Matrix<float> &C){
         bool wTrans = false;
         int m = maxTokenSize;
         int k = maxTokenSize;

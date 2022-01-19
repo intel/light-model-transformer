@@ -29,7 +29,7 @@ bool BatchMatMul_with_stride_bias(dnnl::engine eng, dnnl::stream stm, T_input* i
         int m, int n, int k, int lda, int ldb, int ldc, 
         int batch_stride_a, int batch_stride_b, int batch_stride_c, int batch_stride_bias,
         int batch_src, int batch_weights, int batch_dst, int batch_bias, float scale, bool wTrans) {
-            
+
     auto prim_key = KeyConstruction(input,weight,output,m,n,k,"BatchMatMul_with_stride_bias",bias);
 
     dnnl::memory::dims src_tz = { batch_src, m, k };
@@ -68,14 +68,14 @@ bool BatchMatMul_with_stride_bias(dnnl::engine eng, dnnl::stream stm, T_input* i
         dnnl::primitive_attr attr;
         attr.set_output_scales(/* mask */ 0, {scale});
 
-        auto *prim_desc = new dnnl::matmul::primitive_desc(desc, attr, eng);
+        auto prim_desc = dnnl::matmul::primitive_desc(desc, attr, eng);
 #else
-        auto *prim_desc = new dnnl::matmul::primitive_desc(desc, eng);
+        auto prim_desc = dnnl::matmul::primitive_desc(desc, eng);
 #endif
-        auto *prim = new dnnl::matmul(*prim_desc);
+        auto prim = dnnl::matmul(prim_desc);
 
-        g_prim.insert(std::pair<std::string, dnnl::primitive *>(prim_key, prim));
-        g_mm_prim_desc.insert(std::pair<std::string, dnnl::matmul::primitive_desc *>(prim_key, prim_desc));
+        g_prim.emplace(prim_key, prim);
+        g_mm_prim_desc.emplace(prim_key, prim_desc);
     }
 
     auto user_src_md = dnnl::memory::desc(src_tz, dnnl::memory::data_type::f32, a_stride);
@@ -92,11 +92,11 @@ bool BatchMatMul_with_stride_bias(dnnl::engine eng, dnnl::stream stm, T_input* i
         std::cout << "can find g_mm_prim_desc = " << prim_key << std::endl;
         return false;
     }
-    dnnl::matmul::primitive_desc prim_desc = *it_prim_desc_created->second;
+    auto prim_desc = it_prim_desc_created->second;
 
     auto src_memory = user_src_memory;
-    auto weights_memory = &user_weights_memory;
-    auto bias_memory = &user_bias_memory;
+    auto weights_memory = user_weights_memory;
+    auto bias_memory = user_bias_memory;
     auto dst_memory = dnnl::memory(prim_desc.dst_desc(), eng, output);
 
     if (prim_desc.src_desc() != user_src_memory.get_desc()) {
@@ -112,12 +112,12 @@ bool BatchMatMul_with_stride_bias(dnnl::engine eng, dnnl::stream stm, T_input* i
         auto it_memory_created = g_memory.find(prim_weights_key);
 
         if (it_memory_created == g_memory.end()) {
-            weights_memory = new dnnl::memory(prim_desc.weights_desc(), eng);
-            auto reorder_weights = dnnl::reorder(user_weights_memory, *weights_memory);
+            weights_memory = dnnl::memory(prim_desc.weights_desc(), eng);
+            auto reorder_weights = dnnl::reorder(user_weights_memory, weights_memory);
             reorder_weights.execute(stm, {
                 { DNNL_ARG_FROM, user_weights_memory },
-                { DNNL_ARG_TO, *weights_memory } });
-            g_memory.insert(std::pair<std::string, dnnl::memory *>(prim_weights_key, weights_memory));
+                { DNNL_ARG_TO, weights_memory } });
+            g_memory.emplace(prim_weights_key, weights_memory);
         }
         else {
             weights_memory = it_memory_created->second;
@@ -129,12 +129,12 @@ bool BatchMatMul_with_stride_bias(dnnl::engine eng, dnnl::stream stm, T_input* i
         auto it_memory_created = g_memory.find(prim_bias_key);
 
         if (it_memory_created == g_memory.end()) {
-            bias_memory = new dnnl::memory(prim_desc.bias_desc(), eng);
-            auto reorder_bias = dnnl::reorder(user_bias_memory, *bias_memory);
+            bias_memory = dnnl::memory(prim_desc.bias_desc(), eng);
+            auto reorder_bias = dnnl::reorder(user_bias_memory, bias_memory);
             reorder_bias.execute(stm, {
                 { DNNL_ARG_FROM, user_bias_memory },
-                { DNNL_ARG_TO, *bias_memory } });
-            g_memory.insert(std::pair<std::string, dnnl::memory *>(prim_bias_key, bias_memory));
+                { DNNL_ARG_TO, bias_memory } });
+            g_memory.emplace(prim_bias_key, bias_memory);
         }
         else {
             bias_memory = it_memory_created->second;
@@ -143,10 +143,10 @@ bool BatchMatMul_with_stride_bias(dnnl::engine eng, dnnl::stream stm, T_input* i
     it_prim_created = g_prim.find(prim_key);
 
     if (it_prim_created != g_prim.end()) {
-        it_prim_created->second->execute(stm, {
+        it_prim_created->second.execute(stm, {
             { DNNL_ARG_SRC, src_memory },
-            { DNNL_ARG_WEIGHTS, *weights_memory },
-            { DNNL_ARG_BIAS, *bias_memory },
+            { DNNL_ARG_WEIGHTS, weights_memory },
+            { DNNL_ARG_BIAS, bias_memory },
             { DNNL_ARG_DST, dst_memory } });
     }
     else {
@@ -191,11 +191,11 @@ bool BatchMatMul_with_stride(dnnl::engine eng, dnnl::stream stm, T_input* input,
 
         auto desc = dnnl::matmul::desc(src_md, weights_md, dst_md);
 
-        auto *prim_desc = new dnnl::matmul::primitive_desc(desc, eng);
-        auto *prim = new dnnl::matmul(*prim_desc);
+        auto prim_desc = dnnl::matmul::primitive_desc(desc, eng);
+        auto prim = dnnl::matmul(prim_desc);
 
-        g_prim.insert(std::pair<std::string, dnnl::primitive *>(prim_key, prim));
-        g_mm_prim_desc.insert(std::pair<std::string, dnnl::matmul::primitive_desc *>(prim_key, prim_desc));
+        g_prim.emplace(prim_key, prim);
+        g_mm_prim_desc.emplace(prim_key, prim_desc);
     }
 
     auto user_src_md = dnnl::memory::desc(src_tz, dnnl::memory::data_type::f32, a_stride);
@@ -210,10 +210,10 @@ bool BatchMatMul_with_stride(dnnl::engine eng, dnnl::stream stm, T_input* input,
         std::cout << "can find g_mm_prim_desc = " << prim_key << std::endl;
         return false;
     }
-    dnnl::matmul::primitive_desc prim_desc = *it_prim_desc_created->second;
+    auto prim_desc = it_prim_desc_created->second;
 
     auto src_memory = user_src_memory;
-    auto weights_memory = &user_weights_memory;
+    auto weights_memory = user_weights_memory;
     auto dst_memory = dnnl::memory(prim_desc.dst_desc(), eng, output);
 
     if (prim_desc.src_desc() != user_src_memory.get_desc()) {
@@ -229,12 +229,12 @@ bool BatchMatMul_with_stride(dnnl::engine eng, dnnl::stream stm, T_input* input,
         auto it_memory_created = g_memory.find(prim_weights_key);
 
         if (it_memory_created == g_memory.end()) {
-            weights_memory = new dnnl::memory(prim_desc.weights_desc(), eng);
-            auto reorder_weights = dnnl::reorder(user_weights_memory, *weights_memory);
+            weights_memory = dnnl::memory(prim_desc.weights_desc(), eng);
+            auto reorder_weights = dnnl::reorder(user_weights_memory, weights_memory);
             reorder_weights.execute(stm, {
                 { DNNL_ARG_FROM, user_weights_memory },
-                { DNNL_ARG_TO, *weights_memory } });
-            g_memory.insert(std::pair<std::string, dnnl::memory *>(prim_weights_key, weights_memory));
+                { DNNL_ARG_TO, weights_memory } });
+            g_memory.emplace(prim_weights_key, weights_memory);
         }
         else {
             weights_memory = it_memory_created->second;
@@ -243,9 +243,9 @@ bool BatchMatMul_with_stride(dnnl::engine eng, dnnl::stream stm, T_input* input,
 
     it_prim_created = g_prim.find(prim_key);
     if (it_prim_created != g_prim.end()) {
-        it_prim_created->second->execute(stm, {
+        it_prim_created->second.execute(stm, {
             { DNNL_ARG_SRC, src_memory },
-            { DNNL_ARG_WEIGHTS, *weights_memory },
+            { DNNL_ARG_WEIGHTS, weights_memory },
             { DNNL_ARG_DST, dst_memory } });
     }
     else {

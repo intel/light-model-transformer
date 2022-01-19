@@ -9,17 +9,19 @@
 
 #include <string>
 #include <unordered_map>
+#include <memory>
+#include <sstream>
 
 
 using bfloat16 = std::uint16_t;
 
 
-typedef std::unordered_map<std::string, dnnl::memory*> map_mem_t;
-typedef std::unordered_map<std::string, dnnl::inner_product_forward::primitive_desc*> map_ip_primd_t;
-typedef std::unordered_map<std::string, dnnl::matmul::primitive_desc*> map_mm_primd_t;
-typedef std::unordered_map<std::string, dnnl::batch_normalization_forward::primitive_desc*> map_bn_primd_t;
-typedef std::unordered_map<std::string, dnnl::layer_normalization_forward::primitive_desc*> map_ln_primd_t;
-typedef std::unordered_map<std::string, dnnl::primitive*> map_prim_t;
+typedef std::unordered_map<std::string, dnnl::memory> map_mem_t;
+typedef std::unordered_map<std::string, dnnl::inner_product_forward::primitive_desc> map_ip_primd_t;
+typedef std::unordered_map<std::string, dnnl::matmul::primitive_desc> map_mm_primd_t;
+typedef std::unordered_map<std::string, dnnl::batch_normalization_forward::primitive_desc> map_bn_primd_t;
+typedef std::unordered_map<std::string, dnnl::layer_normalization_forward::primitive_desc> map_ln_primd_t;
+typedef std::unordered_map<std::string, dnnl::primitive> map_prim_t;
 
 dnnl::engine eng(dnnl::engine::kind::cpu, 0);
 
@@ -63,33 +65,6 @@ std::string KeyConstruction(T_input* input, T_wei* weight, T_output* output,int 
     auto weights_addr = KeyConstructionInternal<T_input, T_wei, T_output, T_bias>(func_name, bias);
     weights_addr << '-' << m << '-' << n << '-' << address;
     return weights_addr.str();
-}
-
-void del_dnnl(void)
-{
-    for (map_mem_t::iterator iter = g_memory.begin(); iter != g_memory.end(); ++iter) {
-      delete iter->second;
-    }
-
-    for (map_ip_primd_t::iterator iter = g_ip_prim_desc.begin(); iter != g_ip_prim_desc.end(); ++iter) {
-      delete iter->second;
-    }
-
-    for (map_mm_primd_t::iterator iter = g_mm_prim_desc.begin(); iter != g_mm_prim_desc.end(); ++iter) {
-      delete iter->second;
-    }
-
-    for (map_bn_primd_t::iterator iter = g_bn_prim_desc.begin(); iter != g_bn_prim_desc.end(); ++iter) {
-      delete iter->second;
-    }
-
-    for (map_ln_primd_t::iterator iter = g_ln_prim_desc.begin(); iter != g_ln_prim_desc.end(); ++iter) {
-      delete iter->second;
-    }
-
-    for (map_prim_t::iterator iter = g_prim.begin(); iter != g_prim.end(); ++iter) {
-      delete iter->second;
-    }
 }
 
 #endif

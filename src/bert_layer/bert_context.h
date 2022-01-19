@@ -9,6 +9,8 @@
 
 #include <cstdlib>
 #include <omp.h>
+#include <vector>
+#include <memory>
 
 
 #define SEPARATE_QKV
@@ -31,42 +33,16 @@ public:
 
         qk_resultBuffer.Resize(12*maxTokenSize, maxTokenSize);
 
+        qk_result.reserve(12);
+
         for (int i = 0; i < 12; ++i) {
-            qk_result[i] = qk_resultBuffer.Data() + i * maxTokenSize * maxTokenSize;
-            exp_buffer[i] = (float *)aligned_alloc(64, sizeof(float) * maxTokenSize);
+            qk_result.emplace_back(qk_resultBuffer.Data() + i * maxTokenSize * maxTokenSize);
         }
 
-        magic_value = (float *)aligned_alloc(64, sizeof(float) * maxTokenSize);
-
-        #pragma omp parallel
-        {
-            int tid = omp_get_thread_num();
-            if (tid == 0) { num_threads = omp_get_num_threads(); }
-        }
-
-#ifndef __INTEL_COMPILER 
-        erf_buffer = new float * [num_threads];
-        for (int i = 0; i < num_threads; ++i) {
-            erf_buffer[i] = (float *)aligned_alloc(64, sizeof(float) * intermediateSize);
-        }
-#endif
+        magic_value.reset((float *)aligned_alloc(64, sizeof(float) * maxTokenSize));
     }
 
     virtual ~BertContext() {
-        for (int i = 0; i < 12; ++i) {
-            free(exp_buffer[i]);
-            exp_buffer[i] = NULL;
-        }
-        free(magic_value);
-        magic_value = NULL;
-
-#ifndef __INTEL_COMPILER
-        for (int i = 0; i < num_threads; ++i) {
-            free(erf_buffer[i]);
-        }
-        delete[] erf_buffer;
-        erf_buffer = NULL;
-#endif
     }
 
     // Set input mask
@@ -75,7 +51,7 @@ public:
     {
         for (int i = 0; i < maxTokenSize; ++i)
         {
-            this->magic_value[i] = -10000.0f * (1 - input_mask[i]);
+            this->magic_value.get()[i] = -10000.0f * (1 - input_mask[i]);
         }
     }
 
@@ -90,19 +66,12 @@ public:
     // Buffer to store the result of intermediate
     hpj::Matrix<float> intermediateBuffer;
     // Store the BatchMatMul result of query and key
-    float *qk_result[12];
-    // Store the result of exp for each line
-    float *exp_buffer[12];
+    std::vector<float*> qk_result{};
 
     hpj::Matrix<float> qk_resultBuffer;
 
     // Magic value: 0 or -10000
-    float *magic_value;
-
-    int num_threads;
-#ifndef __INTEL_COMPILER 
-    float **erf_buffer;
-#endif
+    std::unique_ptr<float, decltype(&free)> magic_value = std::unique_ptr<float, decltype(&free)>(0, &free);
 };
 
 #endif
