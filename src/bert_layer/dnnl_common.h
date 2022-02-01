@@ -7,14 +7,13 @@
 
 #include "dnnl.hpp"
 
+#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <memory>
 #include <sstream>
 
-
 using bfloat16 = std::uint16_t;
-
 
 typedef std::unordered_map<std::string, dnnl::memory> map_mem_t;
 typedef std::unordered_map<std::string, dnnl::inner_product_forward::primitive_desc> map_ip_primd_t;
@@ -23,14 +22,47 @@ typedef std::unordered_map<std::string, dnnl::batch_normalization_forward::primi
 typedef std::unordered_map<std::string, dnnl::layer_normalization_forward::primitive_desc> map_ln_primd_t;
 typedef std::unordered_map<std::string, dnnl::primitive> map_prim_t;
 
-dnnl::engine eng(dnnl::engine::kind::cpu, 0);
+class DnnlCommon {
+    public:
+    DnnlCommon() : eng(dnnl::engine::kind::cpu, 0), eng_stream(eng) {}
 
-map_mem_t g_memory;
-map_ip_primd_t g_ip_prim_desc;
-map_mm_primd_t g_mm_prim_desc;
-map_bn_primd_t g_bn_prim_desc;
-map_ln_primd_t g_ln_prim_desc;
-map_prim_t g_prim;
+    
+    ~DnnlCommon(){
+    }
+
+    dnnl::stream getEngineStream(){
+        return eng_stream;
+    };
+    dnnl::engine getEngine(){
+        return eng;
+    }
+
+    map_mem_t& get_g_memory(){
+      return g_memory;
+    }
+
+    map_mm_primd_t& get_g_mm_prim_desc(){
+      return g_mm_prim_desc;
+    }
+
+    map_ln_primd_t& get_g_ln_prim_desc(){
+      return g_ln_prim_desc;
+    }
+  
+    map_prim_t& get_g_prim(){
+      return g_prim;
+    }
+    
+    private:
+    dnnl::engine eng;
+    dnnl::stream eng_stream;
+    map_mem_t g_memory;
+    map_mm_primd_t g_mm_prim_desc;
+    map_ln_primd_t g_ln_prim_desc;
+    map_prim_t g_prim;
+    
+};
+   
 
 template <typename T_input, typename T_wei, typename T_output, typename T_bias = float>
 std::stringstream KeyConstructionInternal(std::string func_name, T_bias* bias = nullptr) {

@@ -9,7 +9,9 @@
 
 
 template <typename T_input>
-bool Softmax(dnnl::engine eng, dnnl::stream stm, T_input* input, int m, int n) {
+bool Softmax(DnnlCommon& dnnl_context, T_input* input, int m, int n) {
+    auto eng = dnnl_context.getEngine();
+    auto stm = dnnl_context.getEngineStream();
     dnnl::memory::dims src_tz = {m, n};
     dnnl::memory::data_type src_dt = dnnl::memory::data_type::f32;
 

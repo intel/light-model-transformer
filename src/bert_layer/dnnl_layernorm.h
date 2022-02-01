@@ -15,10 +15,13 @@
 
 
 template <typename T_input, typename T_gamma, typename T_beta>
-bool LayerNorm_with_gamma_beta(dnnl::engine eng, dnnl::stream stm, T_input* input, T_gamma* gamma, T_beta* beta, int m, int n) {
+bool LayerNorm_with_gamma_beta(DnnlCommon& dnnl_context, T_input* input, T_gamma* gamma, T_beta* beta, int m, int n) {
     
     auto prim_key = KeyConstruction(input,gamma,beta,m,n,"LayerNorm_with_gamma_beta");
-
+    auto eng = dnnl_context.getEngine();
+    auto stm = dnnl_context.getEngineStream();
+    auto& g_ln_prim_desc = dnnl_context.get_g_ln_prim_desc();
+    auto& g_prim = dnnl_context.get_g_prim();
     dnnl::memory::dims src_tz = {m, n};
     dnnl::memory::dims gamma_tz = {1, n};
     dnnl::memory::dims beta_tz = {1, n};

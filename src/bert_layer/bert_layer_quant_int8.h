@@ -22,8 +22,6 @@
 #define QUANT_INT8
 //#define dynamic_quant
 
-dnnl::stream eng_stream(eng);
-
 class BertLayer
 {
 public:
@@ -265,9 +263,9 @@ private:
         float *pBias2 = bias.Data() + n;
         float *pBias3 = bias.Data() + 2*n;
 
-        MatMul_with_bias(eng, eng_stream, pA, pB1, pBias1, pC1, m, n, k, wTrans);
-        MatMul_with_bias(eng, eng_stream, pA, pB2, pBias2, pC2, m, n, k, wTrans);
-        MatMul_with_bias(eng, eng_stream, pA, pB3, pBias3, pC3, m, n, k, wTrans);
+        MatMul_with_bias(ctx.dnnl_context,  pA, pB1, pBias1, pC1, m, n, k, wTrans);
+        MatMul_with_bias(ctx.dnnl_context,  pA, pB2, pBias2, pC2, m, n, k, wTrans);
+        MatMul_with_bias(ctx.dnnl_context,  pA, pB3, pBias3, pC3, m, n, k, wTrans);
     }
 
     void sgemm_with_bias_qkv_quant(hpj::Matrix<float> &A, hpj::Matrix<float> &B, hpj::Matrix<float> &C, hpj::Vector<float> &bias) {
@@ -294,13 +292,13 @@ private:
         float qkv_src_max = max_matrix(A);
         qkv_SrcScale = 127/qkv_src_max;
 
-        MatMul_with_bias_quant(eng, eng_stream, pA, pB1, pBias1, pC1, m, n, k, wTrans, qkv_SrcScale, q_WScale);
-        MatMul_with_bias_quant(eng, eng_stream, pA, pB2, pBias2, pC2, m, n, k, wTrans, qkv_SrcScale, k_WScale);
-        MatMul_with_bias_quant(eng, eng_stream, pA, pB3, pBias3, pC3, m, n, k, wTrans, qkv_SrcScale, v_WScale);
+        MatMul_with_bias_quant(ctx.dnnl_context, pA, pB1, pBias1, pC1, m, n, k, wTrans, qkv_SrcScale, q_WScale);
+        MatMul_with_bias_quant(ctx.dnnl_context, pA, pB2, pBias2, pC2, m, n, k, wTrans, qkv_SrcScale, k_WScale);
+        MatMul_with_bias_quant(ctx.dnnl_context, pA, pB3, pBias3, pC3, m, n, k, wTrans, qkv_SrcScale, v_WScale);
 #else
-        MatMul_with_bias_quant(eng, eng_stream, pA, pB1, pBias1, pC1, m, n, k, wTrans, qkv_SrcScale, q_WScale);
-        MatMul_with_bias_quant(eng, eng_stream, pA, pB2, pBias2, pC2, m, n, k, wTrans, qkv_SrcScale, k_WScale);
-        MatMul_with_bias_quant(eng, eng_stream, pA, pB3, pBias3, pC3, m, n, k, wTrans, qkv_SrcScale, v_WScale);
+        MatMul_with_bias_quant(ctx.dnnl_context, pA, pB1, pBias1, pC1, m, n, k, wTrans, qkv_SrcScale, q_WScale);
+        MatMul_with_bias_quant(ctx.dnnl_context, pA, pB2, pBias2, pC2, m, n, k, wTrans, qkv_SrcScale, k_WScale);
+        MatMul_with_bias_quant(ctx.dnnl_context, pA, pB3, pBias3, pC3, m, n, k, wTrans, qkv_SrcScale, v_WScale);
 #endif
     }
 
@@ -315,7 +313,7 @@ private:
         float *pC = C.Data();
         float *pBias = bias.Data();
 
-        MatMul_with_sum(eng, eng_stream, pA, pB, pBias, pC, m, n, k, wTrans);
+        MatMul_with_sum(ctx.dnnl_context, pA, pB, pBias, pC, m, n, k, wTrans);
     }
 
     void sgemm_with_sum_quant(hpj::Matrix<float> &A, hpj::Matrix<float> &B, hpj::Matrix<float> &C, hpj::Vector<float> &bias,
@@ -330,7 +328,7 @@ private:
         float *pC = C.Data();
         float *pBias = bias.Data();
 
-        MatMul_with_sum_quant(eng, eng_stream, pA, pB, pBias, pC, m, n, k, wTrans, src_scale, weight_scale);
+        MatMul_with_sum_quant(ctx.dnnl_context, pA, pB, pBias, pC, m, n, k, wTrans, src_scale, weight_scale);
     }    
 
     void sgemm_with_sum_src_bf16(hpj::Matrix<bfloat16> &A, hpj::Matrix<float> &B, hpj::Matrix<float> &C, hpj::Vector<float> &bias) {
@@ -344,7 +342,7 @@ private:
         float *pC = C.Data();
         float *pBias = bias.Data();
 
-        MatMul_with_sum_src_bf16(eng, eng_stream, pA, pB, pBias, pC, m, n, k, wTrans);
+        MatMul_with_sum_src_bf16(ctx.dnnl_context, pA, pB, pBias, pC, m, n, k, wTrans);
     }
 
     void sgemm_with_erf(hpj::Matrix<float> &A, hpj::Matrix<float> &B, hpj::Matrix<float> &C, hpj::Vector<float> &bias) {
@@ -360,7 +358,7 @@ private:
 
         const float factor = sqrt(0.5f);
 
-        MatMul_with_erf(eng, eng_stream, pA, pB, pBias, pC, m, n, k, wTrans);
+        MatMul_with_erf(ctx.dnnl_context, pA, pB, pBias, pC, m, n, k, wTrans);
     }
 
     void sgemm_with_erf_quant(hpj::Matrix<float> &A, hpj::Matrix<float> &B, hpj::Matrix<float> &C, hpj::Vector<float> &bias) {
@@ -376,7 +374,7 @@ private:
 
         const float factor = sqrt(0.5f);
 
-        MatMul_with_erf_quant(eng, eng_stream, pA, pB, pBias, pC, m, n, k, wTrans, intermediate_SrcScale, intermediateWScale);
+        MatMul_with_erf_quant(ctx.dnnl_context, pA, pB, pBias, pC, m, n, k, wTrans, intermediate_SrcScale, intermediateWScale);
     }
 
     void sgemm_with_erf_dst_bf16(hpj::Matrix<float> &A, hpj::Matrix<float> &B, hpj::Matrix<bfloat16> &C, hpj::Vector<float> &bias) {
@@ -392,7 +390,7 @@ private:
 
         const float factor = sqrt(0.5f);
 
-        MatMul_with_erf_dst_bf16(eng, eng_stream, pA, pB, pBias, pC, m, n, k, wTrans);
+        MatMul_with_erf_dst_bf16(ctx.dnnl_context, pA, pB, pBias, pC, m, n, k, wTrans);
     }
 
     void denseWithSum_withSum(hpj::Matrix<float> &x, hpj::Matrix<float> &weight, 
@@ -425,7 +423,7 @@ private:
         float *pGamma = gamma.Data();
         float *pBeta = beta.Data();
 
-        LayerNorm_with_gamma_beta(eng, eng_stream, pA, pGamma, pBeta, m, n);
+        LayerNorm_with_gamma_beta(ctx.dnnl_context, pA, pGamma, pBeta, m, n);
     }
 
     void intermediate_with_erf(hpj::Matrix<float> &input, hpj::Matrix<float> &output) {
@@ -472,7 +470,7 @@ private:
 
         float scale = 0.125f;
 
-        BatchMatMul_with_stride_bias(eng, eng_stream, pA, pB, pC, pBias, m, n, k, lda, ldb, ldc, 
+        BatchMatMul_with_stride_bias(ctx.dnnl_context, pA, pB, pC, pBias, m, n, k, lda, ldb, ldc, 
                             batch_stride_a, batch_stride_b, batch_stride_c, batch_stride_bias, 
                             batch_src, batch_weights, batch_dst, batch_bias, scale, wTrans);
     }
@@ -496,7 +494,7 @@ private:
         int batch_stride_b = n;
         int batch_stride_c = n;
 
-        BatchMatMul_with_stride(eng, eng_stream, pA, pB, pC, m, n, k, lda, ldb, ldc, 
+        BatchMatMul_with_stride(ctx.dnnl_context, pA, pB, pC, m, n, k, lda, ldb, ldc, 
                         batch_stride_a, batch_stride_b, batch_stride_c, wTrans, batch);
     }
 
@@ -505,7 +503,7 @@ private:
         int cols = maxTokenSize;
         float *pA = ctx.qk_result[0];
 
-        Softmax(eng, eng_stream, pA, rows, cols);
+        Softmax(ctx.dnnl_context, pA, rows, cols);
     }
 
 private:
@@ -544,6 +542,7 @@ private:
     float attentionoutWScale;
     float intermediateWScale;
     float outWScale;
+
 };
 
 #endif

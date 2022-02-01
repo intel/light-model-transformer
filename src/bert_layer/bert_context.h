@@ -58,6 +58,7 @@ public:
     int maxTokenSize;
     int hiddenSize;
     int intermediateSize;
+    DnnlCommon dnnl_context;
 
     // Store the result of input*qkvWeight
     hpj::Matrix<float> qkvMatMul;

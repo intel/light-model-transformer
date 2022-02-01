@@ -9,7 +9,6 @@
 
 #include <string>
 #include <sstream>
-#include <iostream>
 #include <type_traits>
 
 
@@ -25,13 +24,17 @@
 
 
 template <typename T_input, typename T_wei, typename T_output, typename T_bias>
-bool BatchMatMul_with_stride_bias(dnnl::engine eng, dnnl::stream stm, T_input* input, T_wei* weight, T_output* output, T_bias* bias,
+bool BatchMatMul_with_stride_bias(DnnlCommon& dnnl_context, T_input* input, T_wei* weight, T_output* output, T_bias* bias,
         int m, int n, int k, int lda, int ldb, int ldc, 
         int batch_stride_a, int batch_stride_b, int batch_stride_c, int batch_stride_bias,
         int batch_src, int batch_weights, int batch_dst, int batch_bias, float scale, bool wTrans) {
 
     auto prim_key = KeyConstruction(input,weight,output,m,n,k,"BatchMatMul_with_stride_bias",bias);
-
+    auto eng = dnnl_context.getEngine();
+    auto stm = dnnl_context.getEngineStream();
+    auto& g_memory = dnnl_context.get_g_memory();
+    auto& g_mm_prim_desc = dnnl_context.get_g_mm_prim_desc();
+    auto& g_prim = dnnl_context.get_g_prim();
     dnnl::memory::dims src_tz = { batch_src, m, k };
     dnnl::memory::dims weights_tz = {batch_weights, k, n };
     dnnl::memory::dims dst_tz = {batch_dst, m, n };
@@ -158,11 +161,16 @@ bool BatchMatMul_with_stride_bias(dnnl::engine eng, dnnl::stream stm, T_input* i
 }
 
 template <typename T_input, typename T_wei, typename T_output>
-bool BatchMatMul_with_stride(dnnl::engine eng, dnnl::stream stm, T_input* input, T_wei* weight, T_output* output, 
+bool BatchMatMul_with_stride(DnnlCommon& dnnl_context, T_input* input, T_wei* weight, T_output* output, 
         int m, int n, int k, int lda, int ldb, int ldc, 
         int batch_stride_a, int batch_stride_b, int batch_stride_c, bool wTrans, int batch) {
     
     auto prim_key = KeyConstruction(input,weight,output,m,n,k,"BatchMatMul_with_stride");
+    auto eng = dnnl_context.getEngine();
+    auto stm = dnnl_context.getEngineStream();
+    auto& g_memory = dnnl_context.get_g_memory();
+    auto& g_mm_prim_desc = dnnl_context.get_g_mm_prim_desc();
+    auto& g_prim = dnnl_context.get_g_prim();
 
     dnnl::memory::dims src_tz = { batch, m, k };
     dnnl::memory::dims weights_tz = {batch, k, n };

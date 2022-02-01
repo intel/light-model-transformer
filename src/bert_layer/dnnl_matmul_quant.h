@@ -24,11 +24,16 @@
 #define user_weights_format_trans dnnl::memory::format_tag::ba
 
 template <typename T_input, typename T_wei, typename T_bias, typename T_output>
-bool MatMul_with_erf_quant(dnnl::engine eng, dnnl::stream stm, T_input* input, T_wei* weight, T_bias* bias, T_output* output, 
+bool MatMul_with_erf_quant(DnnlCommon& dnnl_context, T_input* input, T_wei* weight, T_bias* bias, T_output* output, 
         int m, int n, int k, bool wTrans, float src_scale, float weight_scale) {
-	
+    
     auto prim_key = KeyConstruction(input,weight,output,m,n,k,"MatMul_with_erf_quant",bias);
-	
+    auto eng = dnnl_context.getEngine();
+    auto stm = dnnl_context.getEngineStream();
+    auto& g_memory = dnnl_context.get_g_memory();
+    auto& g_mm_prim_desc = dnnl_context.get_g_mm_prim_desc();
+    auto& g_prim = dnnl_context.get_g_prim();
+
     dnnl::memory::dims src_tz = { m, k };
     dnnl::memory::dims weights_tz = { k, n };
     dnnl::memory::dims bias_tz = { 1, n };
@@ -165,11 +170,14 @@ bool MatMul_with_erf_quant(dnnl::engine eng, dnnl::stream stm, T_input* input, T
 
 
 template <typename T_input, typename T_wei, typename T_bias, typename T_output>
-bool MatMul_with_sum_quant(dnnl::engine eng, dnnl::stream stm, T_input* input, T_wei* weight, T_bias* bias, T_output* output, 
+bool MatMul_with_sum_quant(DnnlCommon& dnnl_context, T_input* input, T_wei* weight, T_bias* bias, T_output* output, 
         int m, int n, int k, bool wTrans, float src_scale, float weight_scale) {
-    
-	auto prim_key = KeyConstruction(input,weight,output,m,n,k,"MatMul_with_sum",bias);
-
+    auto eng = dnnl_context.getEngine();
+    auto stm = dnnl_context.getEngineStream();
+    auto prim_key = KeyConstruction(input,weight,output,m,n,k,"MatMul_with_sum",bias);
+    auto& g_memory = dnnl_context.get_g_memory();
+    auto& g_mm_prim_desc = dnnl_context.get_g_mm_prim_desc();
+    auto& g_prim = dnnl_context.get_g_prim();
     dnnl::memory::dims src_tz = { m, k };
     dnnl::memory::dims weights_tz = {k, n };
     dnnl::memory::dims bias_tz = { 1, n };
@@ -302,11 +310,15 @@ bool MatMul_with_sum_quant(dnnl::engine eng, dnnl::stream stm, T_input* input, T
 }
 
 template <typename T_input, typename T_wei, typename T_bias, typename T_output>
-bool MatMul_with_bias_quant(dnnl::engine eng, dnnl::stream stm, T_input* input, T_wei* weight, T_bias* bias, T_output* output, 
+bool MatMul_with_bias_quant(DnnlCommon& dnnl_context, T_input* input, T_wei* weight, T_bias* bias, T_output* output, 
         int m, int n, int k, bool wTrans, float src_scale, float weight_scale) {
 
+    auto eng = dnnl_context.getEngine();
+    auto stm = dnnl_context.getEngineStream();
     auto prim_key = KeyConstruction(input,weight,output,m,n,k,"MatMul_with_bias",bias);
-
+    auto& g_memory = dnnl_context.get_g_memory();
+    auto& g_mm_prim_desc = dnnl_context.get_g_mm_prim_desc();
+    auto& g_prim = dnnl_context.get_g_prim();
     dnnl::memory::dims src_tz = { m, k };
     dnnl::memory::dims weights_tz = {k, n };
     dnnl::memory::dims bias_tz = { 1, n };
