@@ -35,6 +35,8 @@ flags.DEFINE_bool(
     "Whether to lower case the input text. Should be True for uncased "
     "models and False for cased models.")
 
+flags.DEFINE_string("out_file", None, "Appends the result into the provided file.")
+
 flags.DEFINE_string("vocab_file", None, "The vocabulary file that the BERT model was trained on.", required=True)
 
 
@@ -356,3 +358,8 @@ if __name__ == "__main__":
         correct += 1
 
     print('%d/%d=%f' % (correct, total, 1.0 * correct / total))
+
+    if (FLAGS.out_file):
+      f = open(FLAGS.out_file, 'a')
+      f.write('%s\t%s\t%d/%d\t%f\n' % (model_path, tf.__version__, correct, total, 1.0 * correct / total))
+      f.close()
