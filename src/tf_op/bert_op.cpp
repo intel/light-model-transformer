@@ -17,7 +17,7 @@ REGISTER_OP("Bert")
     .Input("input_mask: MaskT")
     .Input("weights: NumWeights * float")
     .Output("encoded: float")
-    .Attr("MaskT: {int32, int64}")
+    .Attr("MaskT: {int32, int64, float, double}")
     .Attr("NumWeights: int >= 16") // num_layers = NumWeights/16
     .Attr("HiddenSize: int = 768")
     .Attr("NumAttentionHeads: int = 12")
@@ -67,15 +67,28 @@ public:
         const Tensor &tensor_embeded = context->input(0);
         const Tensor &tensor_masks = context->input(1);
 
-        OP_REQUIRES(context, (tensor_embeded.dims() == 2),
+        OP_REQUIRES(context, (tensor_embeded.dims() == 2 || tensor_embeded.dims() == 3),
                     errors::InvalidArgument("Dims unexpected: dim(input) != 2"));
-        OP_REQUIRES(context, (tensor_embeded.dim_size(1) == ctx.hiddenSize),
+
+        // TF2 models provide batched input, first dimension is batch size, required to be 1 for now.
+        if (tensor_embeded.dims() == 3)
+        {
+            OP_REQUIRES(context, (tensor_embeded.dim_size(0) == 1),
+                        errors::InvalidArgument("Only batch size of 1 is supported right now."));
+        }
+
+        // Due to the above, for a 2D tensor: dim_size(1) == ctx.hiddensize,
+        // and for 3D tensor dim_size(2) == ctx.hiddensize
+        int hidden_size_dim_idx = tensor_embeded.dims() - 1;
+        OP_REQUIRES(context, (tensor_embeded.dim_size(hidden_size_dim_idx) == ctx.hiddenSize),
                     errors::InvalidArgument("Unexpected hidden size"));
+
 
         float *embeded = (float *)tensor_embeded.tensor_data().data();
         MaskT *masks = (MaskT *)tensor_masks.tensor_data().data();
 
-        int total_tokens = tensor_embeded.dim_size(0); // total_tokens = batch_size * tokens_each_def128
+        int total_tokens_idx = tensor_embeded.dims() - 2;
+        int total_tokens = tensor_embeded.dim_size(total_tokens_idx); // total_tokens = batch_size * tokens_each_def128
 
         // Initialize the weights and mode
         if (!initialized)
@@ -109,6 +122,7 @@ public:
         {
             memcpy(output + i * hiddenSize, pinput->Row(i), sizeof(float) * hiddenSize);
         }
+
     }
 
 private:
@@ -179,3 +193,5 @@ private:
 
 REGISTER_KERNEL_BUILDER(Name("Bert").Device(DEVICE_CPU).TypeConstraint<int32>("MaskT"), BertOp<int32>);
 REGISTER_KERNEL_BUILDER(Name("Bert").Device(DEVICE_CPU).TypeConstraint<int64>("MaskT"), BertOp<int64>);
+REGISTER_KERNEL_BUILDER(Name("Bert").Device(DEVICE_CPU).TypeConstraint<float>("MaskT"), BertOp<float>);
+REGISTER_KERNEL_BUILDER(Name("Bert").Device(DEVICE_CPU).TypeConstraint<double>("MaskT"), BertOp<double>);

@@ -4,7 +4,6 @@
 
 from model_modifier.pattern_pb2 import Pattern
 
-from tensorflow.core.framework.graph_pb2 import GraphDef
 from tensorflow.core.framework.node_def_pb2 import NodeDef
 
 from queue import LifoQueue as Stack
@@ -43,7 +42,7 @@ class PatternLocator:
         reference_seed_node = self.__pattern.seed_nodes[seed_node_idx]
         potential_seed_nodes = self._get_nodes_with_op(reference_seed_node.op)
 
-        self.log.info(
+        self.log.debug(
             f'Looking for seed node {seed_node_idx + 1} of {len(self.__pattern.seed_nodes)}.')
         i = -1
         for node in potential_seed_nodes:
@@ -157,17 +156,23 @@ class PatternLocator:
 
         conditions.append(node.op == ref_node.op)   # Must be same op
         # Must be same datatype
-        conditions.append(node.attr['T'] == ref_node.attr['T'])
+        conditions.append(node.attr.get('T') == ref_node.attr.get('T'))
         # Must be same number of inputs
         conditions.append(len(node.input) == len(ref_node.input))
         # Must be same output shape
-        conditions.append(node.attr['_output_shapes']
-                          == ref_node.attr['_output_shapes'])
+        conditions.append(node.attr.get('_output_shapes')
+                          == ref_node.attr.get('_output_shapes'))
 
         return all(conditions)
 
     def _get_node_by_name(self, node_name: str, nodes: Sequence[NodeDef]) -> Optional[NodeDef]:
-        return next((node for node in nodes if node.name == node_name), None)
+        stripped_node_name = self._strip_node_name(node_name)
+        return next((node for node in nodes if node.name == stripped_node_name), None)
+
+    def _strip_node_name(self, node_name: str) -> str:
+        '''Node inputs can be in the form "node_name:tensor_name:index", e.g. "add:z:0". By stripping everything after 
+        the first colon, we can use functions like get_node_by_name on node names and on node inputs the same way.'''
+        return node_name.split(':', 1)[0]
 
     def _is_internal_node(self, node: NodeDef, pattern: Pattern) -> bool:
         return node in pattern.internal_nodes
