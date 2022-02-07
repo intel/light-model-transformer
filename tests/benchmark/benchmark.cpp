@@ -199,6 +199,7 @@ int main(int argc, char **argv)
   int tokenSize = 128;
   int batchSize = 1;
 
+try {
   if (argc > 1)
   {
     benchmarkTimes = atoi(argv[1]);
@@ -218,7 +219,14 @@ int main(int argc, char **argv)
   // Fake weights
   LayerWeights weights[12];
 
-  benchmarkMB1(tokenSize, weights, input);
+    benchmarkMB1(tokenSize, weights, input);
+} catch (const std::exception& e) {
+  printf("Caught exception: %s\n", e.what());
+  return 1;
+} catch (...) {
+  printf("Caught unknown exception\n");
+  return 1;
+}
 
   return 0;
 }

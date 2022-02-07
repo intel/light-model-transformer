@@ -6,6 +6,8 @@
 #define __DNNL_LAYERNORM__
 
 #include "dnnl_common.h"
+#include "dnnl_data.hpp"
+#include "dnnl_ops.hpp"
 
 #include <string>
 #include <iostream>
@@ -16,76 +18,27 @@
 
 template <typename T_input, typename T_gamma, typename T_beta>
 bool LayerNorm_with_gamma_beta(DnnlCommon& dnnl_context, T_input* input, T_gamma* gamma, T_beta* beta, int m, int n) {
-    
+    using namespace dnnl_wrappers;
+
+    auto& eng = dnnl_context.getEngine();
+    auto& stm = dnnl_context.getEngineStream();
+
     auto prim_key = KeyConstruction(input,gamma,beta,m,n,"LayerNorm_with_gamma_beta");
-    auto eng = dnnl_context.getEngine();
-    auto stm = dnnl_context.getEngineStream();
-    auto& g_ln_prim_desc = dnnl_context.get_g_ln_prim_desc();
-    auto& g_prim = dnnl_context.get_g_prim();
-    dnnl::memory::dims src_tz = {m, n};
+
+    dnnl::memory::dims data_tz = {m, n};
     dnnl::memory::dims gamma_tz = {1, n};
     dnnl::memory::dims beta_tz = {1, n};
 
-    dnnl::memory::data_type src_dt = dnnl::memory::data_type::f32;
-    dnnl::memory::data_type gamma_dt = dnnl::memory::data_type::f32;
-    dnnl::memory::data_type beta_dt = dnnl::memory::data_type::f32;
+    auto data_memory = AttachMemory(eng, data_tz, input);
+    auto input_data = DataSource(data_memory);
+    auto gamma_data = DataSource(AttachMemory(eng, gamma_tz, gamma));
+    auto beta_data  = DataSource(AttachMemory(eng, beta_tz, beta));
 
-    auto it_prim_created = g_prim.find(prim_key);
-    if (it_prim_created == g_prim.end()) {
-        auto src_md     = dnnl::memory::desc({ src_tz }, src_dt, dnnl::memory::format_tag::nc);
+    const float epsilon = 9.999999960041972e-13;
+    const dnnl::normalization_flags flags = dnnl::normalization_flags::use_scale | dnnl::normalization_flags::use_shift;
 
-        auto bnorm_d = dnnl::layer_normalization_forward::desc(
-                dnnl::prop_kind::forward_inference, src_md, 9.999999960041972e-13,
-                dnnl::normalization_flags::use_scale | dnnl::normalization_flags::use_shift );
-
-        // Create primitive descriptor.
-        auto prim_desc = dnnl::layer_normalization_forward::primitive_desc(bnorm_d, eng);
-        auto prim = dnnl::layer_normalization_forward(prim_desc);
-
-        g_prim.emplace(prim_key, prim);
-        g_ln_prim_desc.emplace(prim_key, prim_desc);
-    }
-
-    auto user_src_md = dnnl::memory::desc(src_tz, dnnl::memory::data_type::f32, dnnl::memory::format_tag::nc);
-    auto user_gamma_md = dnnl::memory::desc(gamma_tz, dnnl::memory::data_type::f32, dnnl::memory::format_tag::nc); // ab or ba
-    auto user_beta_md = dnnl::memory::desc(beta_tz, dnnl::memory::data_type::f32, dnnl::memory::format_tag::nc); 
-
-    auto user_src_memory = dnnl::memory(user_src_md, eng, input);
-    auto user_gamma_memory = dnnl::memory(user_gamma_md, eng, gamma);
-    auto user_beta_memory = dnnl::memory(user_beta_md, eng, beta);
-
-    auto it_prim_desc_created = g_ln_prim_desc.find(prim_key);
-    if (it_prim_desc_created == g_ln_prim_desc.end()) {
-        std::cout << "batchnorm error: can find g_ln_prim_desc = " << prim_key << std::endl;
-        return false;
-    }
-    auto prim_desc = it_prim_desc_created->second;
-
-    auto src_memory = user_src_memory;
-    auto gamma_memory = &user_gamma_memory;
-    auto beta_memory = &user_beta_memory;
-
-    if (prim_desc.src_desc() != user_src_memory.get_desc()) {
-        src_memory = dnnl::memory(prim_desc.src_desc(), eng);
-        auto reorder_src = dnnl::reorder(user_src_memory, src_memory);
-        reorder_src.execute(stm, {
-            { DNNL_ARG_FROM, user_src_memory },
-            { DNNL_ARG_TO, src_memory } });
-    }
-
-    it_prim_created = g_prim.find(prim_key);
-    if (it_prim_created != g_prim.end()) {
-        it_prim_created->second.execute(stm, {
-            { DNNL_ARG_SRC, src_memory },
-            { DNNL_ARG_SCALE, *gamma_memory },
-            { DNNL_ARG_SHIFT, *beta_memory },
-            { DNNL_ARG_DST, src_memory } });
-    }
-    else {
-        std::cout << "batchnorm: execute error, prim_key = " << prim_key << std::endl;
-        return false;
-    }
-    stm.wait();
+    auto layer_norm = CachedLayerNorm<float>(prim_key, dnnl_context, m, n, epsilon, flags);
+    layer_norm.Compute(stm, input_data, gamma_data, beta_data, data_memory);
     return true;
 }
 

@@ -15,6 +15,24 @@
 
 using bfloat16 = std::uint16_t;
 
+template <class T> struct DnnlDataType;
+
+template <> struct DnnlDataType<float> {
+    static constexpr dnnl::memory::data_type value = dnnl::memory::data_type::f32;
+};
+
+template <> struct DnnlDataType<bfloat16> {
+    static constexpr dnnl::memory::data_type value = dnnl::memory::data_type::bf16;
+};
+
+template <> struct DnnlDataType<int8_t> {
+    static constexpr dnnl::memory::data_type value = dnnl::memory::data_type::s8;
+};
+
+template <> struct DnnlDataType<uint8_t> {
+    static constexpr dnnl::memory::data_type value = dnnl::memory::data_type::u8;
+};
+
 typedef std::unordered_map<std::string, dnnl::memory> map_mem_t;
 typedef std::unordered_map<std::string, dnnl::inner_product_forward::primitive_desc> map_ip_primd_t;
 typedef std::unordered_map<std::string, dnnl::matmul::primitive_desc> map_mm_primd_t;
@@ -26,14 +44,11 @@ class DnnlCommon {
     public:
     DnnlCommon() : eng(dnnl::engine::kind::cpu, 0), eng_stream(eng) {}
 
-    
-    ~DnnlCommon(){
-    }
-
-    dnnl::stream getEngineStream(){
+    dnnl::stream& getEngineStream(){
         return eng_stream;
     };
-    dnnl::engine getEngine(){
+
+    dnnl::engine& getEngine(){
         return eng;
     }
 
@@ -60,9 +75,7 @@ class DnnlCommon {
     map_mm_primd_t g_mm_prim_desc;
     map_ln_primd_t g_ln_prim_desc;
     map_prim_t g_prim;
-    
 };
-   
 
 template <typename T_input, typename T_wei, typename T_output, typename T_bias = float>
 std::stringstream KeyConstructionInternal(std::string func_name, T_bias* bias = nullptr) {

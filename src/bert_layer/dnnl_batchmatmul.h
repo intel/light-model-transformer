@@ -6,22 +6,50 @@
 #define __DNNL_BATCH_MATMUL__
 
 #include "dnnl_common.h"
+#include "dnnl_attr.hpp"
+#include "dnnl_data.hpp"
+#include "dnnl_ops.hpp"
 
 #include <string>
 #include <sstream>
 #include <type_traits>
 
+dnnl::memory::desc StridedMD(int batch, int x, int y, int batch_stride, int ld, dnnl::memory::data_type dt, bool trans = false) {
+    const dnnl::memory::dims tz{batch, x, y};
+    const auto stride = trans ? dnnl::memory::dims{batch_stride, 1, ld} : dnnl::memory::dims{batch_stride, ld, 1};
+    return dnnl::memory::desc{tz, dt, stride};
+}
 
-#define batch_src_format dnnl::memory::format_tag::abc
-#define batch_bias_format dnnl::memory::format_tag::abc
-#define batch_dst_format dnnl::memory::format_tag::abc
-#define batch_weights_format dnnl::memory::format_tag::any
+template <typename T_input, typename T_wei, typename T_output, typename T_bias>
+bool BatchMatMul(const std::string& prim_key, DnnlCommon& dnnl_context,
+                 T_input* input, T_wei* weight, T_output* output, T_bias* bias,
+                 dnnl::memory::desc src_md, dnnl::memory::desc weights_md, dnnl::memory::desc dst_md, dnnl::memory::desc bias_md,
+        const dnnl_wrappers::BuildAttrs& attr = {}) {
+    using namespace dnnl_wrappers;
 
-#define batch_user_src_format dnnl::memory::format_tag::abc
-#define batch_user_bias_format dnnl::memory::format_tag::abc
-#define batch_user_weights_format dnnl::memory::format_tag::abc
-#define batch_user_weights_format_trans dnnl::memory::format_tag::acb
+    auto eng = dnnl_context.getEngine();
+    auto stm = dnnl_context.getEngineStream();
+    auto& g_mem = dnnl_context.get_g_memory();
 
+    auto mat_mul = CachedMatMul(prim_key, dnnl_context, src_md, weights_md, bias_md, dst_md, attr);
+
+    // hack MD data types for data sources
+    src_md.data.data_type = dnnl::memory::convert_to_c(DnnlDataType<T_input>::value);
+    weights_md.data.data_type = dnnl::memory::convert_to_c(DnnlDataType<T_wei>::value);
+    bias_md.data.data_type = dnnl::memory::convert_to_c(DnnlDataType<T_bias>::value);
+
+    auto input_data   = DataSource(dnnl::memory{src_md, eng, input});
+    auto weights_data = GCachedDataSource(prim_key + "-weights", g_mem, dnnl::memory{weights_md, eng, weight});
+    
+    auto user_bias_mem = bias ? dnnl::memory{bias_md, eng, bias} : dnnl::memory{};
+    auto bias_data    = GCachedDataSource(prim_key + "-bias", g_mem, user_bias_mem);
+
+    auto output_memory = dnnl::memory(dst_md, eng, output);
+
+    mat_mul.Compute(stm, input_data, weights_data, bias_data, output_memory);
+
+    return true;
+}
 
 template <typename T_input, typename T_wei, typename T_output, typename T_bias>
 bool BatchMatMul_with_stride_bias(DnnlCommon& dnnl_context, T_input* input, T_wei* weight, T_output* output, T_bias* bias,
@@ -30,134 +58,26 @@ bool BatchMatMul_with_stride_bias(DnnlCommon& dnnl_context, T_input* input, T_we
         int batch_src, int batch_weights, int batch_dst, int batch_bias, float scale, bool wTrans) {
 
     auto prim_key = KeyConstruction(input,weight,output,m,n,k,"BatchMatMul_with_stride_bias",bias);
-    auto eng = dnnl_context.getEngine();
-    auto stm = dnnl_context.getEngineStream();
-    auto& g_memory = dnnl_context.get_g_memory();
-    auto& g_mm_prim_desc = dnnl_context.get_g_mm_prim_desc();
-    auto& g_prim = dnnl_context.get_g_prim();
-    dnnl::memory::dims src_tz = { batch_src, m, k };
-    dnnl::memory::dims weights_tz = {batch_weights, k, n };
-    dnnl::memory::dims dst_tz = {batch_dst, m, n };
-    dnnl::memory::dims bias_tz = {batch_bias, 1, n };
-
-    dnnl::memory::dims a_stride = dnnl::memory::dims {batch_stride_a, lda, 1};
-    dnnl::memory::dims b_stride = wTrans ? dnnl::memory::dims {batch_stride_b, 1, ldb} : dnnl::memory::dims {batch_stride_b, ldb, 1};
-    dnnl::memory::dims c_stride = dnnl::memory::dims {batch_stride_c, ldc, 1};
-    dnnl::memory::dims bias_stride = dnnl::memory::dims {batch_stride_bias, 0, 1};
 
 #if 0
     dnnl::memory::data_type src_dt = dnnl::memory::data_type::bf16;
     dnnl::memory::data_type weights_dt = dnnl::memory::data_type::bf16;
-    dnnl::memory::data_type dst_dt = dnnl::memory::data_type::f32;
     dnnl::memory::data_type bias_dt = dnnl::memory::data_type::f32;
 #else
     dnnl::memory::data_type src_dt = dnnl::memory::data_type::f32;
     dnnl::memory::data_type weights_dt = dnnl::memory::data_type::f32;
-    dnnl::memory::data_type dst_dt = dnnl::memory::data_type::f32;
     dnnl::memory::data_type bias_dt = dnnl::memory::data_type::f32;
 #endif
 
-    auto it_prim_created = g_prim.find(prim_key);
+    dnnl::memory::data_type dst_dt = DnnlDataType<T_output>::value;
 
-    if (it_prim_created == g_prim.end()) {
-        auto src_md     = dnnl::memory::desc({ src_tz }, src_dt, a_stride);
-        auto weights_md = dnnl::memory::desc({ weights_tz }, weights_dt, b_stride);
-        auto bias_md    = dnnl::memory::desc({ bias_tz }, bias_dt, bias_stride);
-        auto dst_md     = dnnl::memory::desc({ dst_tz }, dst_dt, c_stride);  
+    auto src_md     = StridedMD(batch_src, m, k, batch_stride_a, lda, src_dt);
+    auto weights_md = StridedMD(batch_weights, k, n, batch_stride_b, ldb, weights_dt, wTrans);
+    auto bias_md    = StridedMD(batch_bias, 1, n, batch_stride_bias, 0, bias_dt);
+    auto dst_md     = StridedMD(batch_dst, m, n, batch_stride_c, ldc, dst_dt);
 
-        auto desc = dnnl::matmul::desc(src_md, weights_md, bias_md, dst_md);
-
-#if 1
-        dnnl::primitive_attr attr;
-        attr.set_output_scales(/* mask */ 0, {scale});
-
-        auto prim_desc = dnnl::matmul::primitive_desc(desc, attr, eng);
-#else
-        auto prim_desc = dnnl::matmul::primitive_desc(desc, eng);
-#endif
-        auto prim = dnnl::matmul(prim_desc);
-
-        g_prim.emplace(prim_key, prim);
-        g_mm_prim_desc.emplace(prim_key, prim_desc);
-    }
-
-    auto user_src_md = dnnl::memory::desc(src_tz, dnnl::memory::data_type::f32, a_stride);
-    auto user_weights_md = dnnl::memory::desc(weights_tz, dnnl::memory::data_type::f32, b_stride);
-    auto user_bias_md = dnnl::memory::desc(bias_tz, dnnl::memory::data_type::f32, bias_stride);
-
-    auto user_src_memory = dnnl::memory(user_src_md, eng, input);
-    auto user_weights_memory = dnnl::memory(user_weights_md, eng, weight);
-    auto user_bias_memory = dnnl::memory(user_bias_md, eng, bias);
-
-    auto it_prim_desc_created = g_mm_prim_desc.find(prim_key);
-
-    if (it_prim_desc_created == g_mm_prim_desc.end()) {
-        std::cout << "can find g_mm_prim_desc = " << prim_key << std::endl;
-        return false;
-    }
-    auto prim_desc = it_prim_desc_created->second;
-
-    auto src_memory = user_src_memory;
-    auto weights_memory = user_weights_memory;
-    auto bias_memory = user_bias_memory;
-    auto dst_memory = dnnl::memory(prim_desc.dst_desc(), eng, output);
-
-    if (prim_desc.src_desc() != user_src_memory.get_desc()) {
-        src_memory = dnnl::memory(prim_desc.src_desc(), eng);
-        auto reorder_src = dnnl::reorder(user_src_memory, src_memory);
-        reorder_src.execute(stm, {
-            { DNNL_ARG_FROM, user_src_memory },
-            { DNNL_ARG_TO, src_memory } });
-    }
-
-    if (prim_desc.weights_desc() != user_weights_memory.get_desc()) {
-        std::string prim_weights_key = prim_key+"-weights";
-        auto it_memory_created = g_memory.find(prim_weights_key);
-
-        if (it_memory_created == g_memory.end()) {
-            weights_memory = dnnl::memory(prim_desc.weights_desc(), eng);
-            auto reorder_weights = dnnl::reorder(user_weights_memory, weights_memory);
-            reorder_weights.execute(stm, {
-                { DNNL_ARG_FROM, user_weights_memory },
-                { DNNL_ARG_TO, weights_memory } });
-            g_memory.emplace(prim_weights_key, weights_memory);
-        }
-        else {
-            weights_memory = it_memory_created->second;
-        }
-    }
-
-    if (prim_desc.bias_desc() != user_bias_memory.get_desc()) {
-        std::string prim_bias_key = prim_key+"-bias";
-        auto it_memory_created = g_memory.find(prim_bias_key);
-
-        if (it_memory_created == g_memory.end()) {
-            bias_memory = dnnl::memory(prim_desc.bias_desc(), eng);
-            auto reorder_bias = dnnl::reorder(user_bias_memory, bias_memory);
-            reorder_bias.execute(stm, {
-                { DNNL_ARG_FROM, user_bias_memory },
-                { DNNL_ARG_TO, bias_memory } });
-            g_memory.emplace(prim_bias_key, bias_memory);
-        }
-        else {
-            bias_memory = it_memory_created->second;
-        }
-    }
-    it_prim_created = g_prim.find(prim_key);
-
-    if (it_prim_created != g_prim.end()) {
-        it_prim_created->second.execute(stm, {
-            { DNNL_ARG_SRC, src_memory },
-            { DNNL_ARG_WEIGHTS, weights_memory },
-            { DNNL_ARG_BIAS, bias_memory },
-            { DNNL_ARG_DST, dst_memory } });
-    }
-    else {
-        std::cout << "execute error, prim_key = " << prim_key << std::endl;
-        return false;
-    }
-    stm.wait();
-    return true;
+    return BatchMatMul(prim_key, dnnl_context, input, weight, output, bias,
+                       src_md, weights_md, dst_md, bias_md, dnnl_wrappers::BuildAttrs().Scale(scale));
 }
 
 template <typename T_input, typename T_wei, typename T_output>
@@ -166,102 +86,23 @@ bool BatchMatMul_with_stride(DnnlCommon& dnnl_context, T_input* input, T_wei* we
         int batch_stride_a, int batch_stride_b, int batch_stride_c, bool wTrans, int batch) {
     
     auto prim_key = KeyConstruction(input,weight,output,m,n,k,"BatchMatMul_with_stride");
-    auto eng = dnnl_context.getEngine();
-    auto stm = dnnl_context.getEngineStream();
-    auto& g_memory = dnnl_context.get_g_memory();
-    auto& g_mm_prim_desc = dnnl_context.get_g_mm_prim_desc();
-    auto& g_prim = dnnl_context.get_g_prim();
-
-    dnnl::memory::dims src_tz = { batch, m, k };
-    dnnl::memory::dims weights_tz = {batch, k, n };
-    dnnl::memory::dims dst_tz = {batch, m, n };
-
-    dnnl::memory::dims a_stride = dnnl::memory::dims {batch_stride_a, lda, 1};
-    dnnl::memory::dims b_stride = wTrans ? dnnl::memory::dims {batch_stride_b, 1, ldb} : dnnl::memory::dims {batch_stride_b, ldb, 1};
-    dnnl::memory::dims c_stride = dnnl::memory::dims {batch_stride_c, ldc, 1};
 
 #if 0
     dnnl::memory::data_type src_dt = dnnl::memory::data_type::bf16;
     dnnl::memory::data_type weights_dt = dnnl::memory::data_type::bf16;
-    dnnl::memory::data_type dst_dt = dnnl::memory::data_type::f32;
 #else
     dnnl::memory::data_type src_dt = dnnl::memory::data_type::f32;
     dnnl::memory::data_type weights_dt = dnnl::memory::data_type::f32;
-    dnnl::memory::data_type dst_dt = dnnl::memory::data_type::f32;
 #endif
 
-    auto it_prim_created = g_prim.find(prim_key);
+    dnnl::memory::data_type dst_dt = DnnlDataType<T_output>::value;
 
-    if (it_prim_created == g_prim.end()) {
-        auto src_md     = dnnl::memory::desc({ src_tz }, src_dt, a_stride);
-        auto weights_md = dnnl::memory::desc({ weights_tz }, weights_dt, b_stride);
-        auto dst_md     = dnnl::memory::desc({ dst_tz }, dst_dt, c_stride);  
+    auto src_md     = StridedMD(batch, m, k, batch_stride_a, lda, src_dt);
+    auto weights_md = StridedMD(batch, k, n, batch_stride_b, ldb, weights_dt, wTrans);
+    auto dst_md     = StridedMD(batch, m, n, batch_stride_c, ldc, dst_dt);
 
-        auto desc = dnnl::matmul::desc(src_md, weights_md, dst_md);
-
-        auto prim_desc = dnnl::matmul::primitive_desc(desc, eng);
-        auto prim = dnnl::matmul(prim_desc);
-
-        g_prim.emplace(prim_key, prim);
-        g_mm_prim_desc.emplace(prim_key, prim_desc);
-    }
-
-    auto user_src_md = dnnl::memory::desc(src_tz, dnnl::memory::data_type::f32, a_stride);
-    auto user_weights_md = dnnl::memory::desc(weights_tz, dnnl::memory::data_type::f32, b_stride);
-
-    auto user_src_memory = dnnl::memory(user_src_md, eng, input);
-    auto user_weights_memory = dnnl::memory(user_weights_md, eng, weight);
-
-    auto it_prim_desc_created = g_mm_prim_desc.find(prim_key);
-
-    if (it_prim_desc_created == g_mm_prim_desc.end()) {
-        std::cout << "can find g_mm_prim_desc = " << prim_key << std::endl;
-        return false;
-    }
-    auto prim_desc = it_prim_desc_created->second;
-
-    auto src_memory = user_src_memory;
-    auto weights_memory = user_weights_memory;
-    auto dst_memory = dnnl::memory(prim_desc.dst_desc(), eng, output);
-
-    if (prim_desc.src_desc() != user_src_memory.get_desc()) {
-        src_memory = dnnl::memory(prim_desc.src_desc(), eng);
-        auto reorder_src = dnnl::reorder(user_src_memory, src_memory);
-        reorder_src.execute(stm, {
-            { DNNL_ARG_FROM, user_src_memory },
-            { DNNL_ARG_TO, src_memory } });
-    }
-
-    if (prim_desc.weights_desc() != user_weights_memory.get_desc()) {
-        std::string prim_weights_key = prim_key+"-weights";
-        auto it_memory_created = g_memory.find(prim_weights_key);
-
-        if (it_memory_created == g_memory.end()) {
-            weights_memory = dnnl::memory(prim_desc.weights_desc(), eng);
-            auto reorder_weights = dnnl::reorder(user_weights_memory, weights_memory);
-            reorder_weights.execute(stm, {
-                { DNNL_ARG_FROM, user_weights_memory },
-                { DNNL_ARG_TO, weights_memory } });
-            g_memory.emplace(prim_weights_key, weights_memory);
-        }
-        else {
-            weights_memory = it_memory_created->second;
-        }
-    }
-
-    it_prim_created = g_prim.find(prim_key);
-    if (it_prim_created != g_prim.end()) {
-        it_prim_created->second.execute(stm, {
-            { DNNL_ARG_SRC, src_memory },
-            { DNNL_ARG_WEIGHTS, weights_memory },
-            { DNNL_ARG_DST, dst_memory } });
-    }
-    else {
-        std::cout << "execute error, prim_key = " << prim_key << std::endl;
-        return false;
-    }
-    stm.wait();
-    return true;
+    return BatchMatMul(prim_key, dnnl_context, input, weight, output, (float*)nullptr,
+                       src_md, weights_md, dst_md, {});
 }
 
 #endif

@@ -6,13 +6,44 @@
 #define __DNNL_MATMUL__
 
 #include "dnnl_common.h"
+#include "dnnl_attr.hpp"
+#include "dnnl_data.hpp"
+#include "dnnl_ops.hpp"
 
 #include <sstream>
 #include <string>
 #include <iostream>
 #include <type_traits>
 
+template <typename T_input, typename T_wei, typename T_bias, typename T_output>
+bool MatMul_noquant(const std::string& prim_key, DnnlCommon& dnnl_context,
+                    T_input* input, T_wei* weight, T_bias* bias, T_output* output,
+                    int m, int n, int k, bool wTrans, const dnnl_wrappers::BuildAttrs& attr = {}) {
+    using namespace dnnl_wrappers;
 
+    auto& eng = dnnl_context.getEngine();
+    auto& stm = dnnl_context.getEngineStream();
+    auto& g_mem = dnnl_context.get_g_memory();
+
+    const MatMulDims dims{m, n, k};
+
+    auto input_data = DataSource(AttachMemory(eng, dims.src_tz, input));
+    auto weights_data = GCachedDataSource(prim_key + "-weights", g_mem, AttachMemory(eng, dims.weights_tz, weight, wTrans));
+    auto bias_data = GCachedDataSource(prim_key + "-bias", g_mem, AttachMemory(eng, dims.bias_tz, bias));
+    auto output_memory = AttachMemory(eng, dims.dst_tz, output);
+
+#if 1
+    auto mat_mul = CachedMatMul<bfloat16, bfloat16, T_bias, T_output>(prim_key, dnnl_context, m, n, k, attr);
+#else
+    auto mat_mul = CachedMatMul<T_input, T_wei, T_bias, T_output>(prim_key, dnnl_context, m, n, k, attr);
+#endif
+
+    mat_mul.Compute(stm, input_data, weights_data, bias_data, output_memory);
+
+    return true;
+}
+
+// FIXME(rfsaliev) defines below never used but kept for simplified diff in review
 #define src_format dnnl::memory::format_tag::ab
 #define bias_format dnnl::memory::format_tag::ab
 #define dst_format dnnl::memory::format_tag::ab
@@ -26,795 +57,97 @@
 template <typename T_input, typename T_wei, typename T_bias, typename T_output>
 bool MatMul_with_erf_dst_bf16(DnnlCommon& dnnl_context, T_input* input, T_wei* weight, T_bias* bias, T_output* output, int m, int n, int k, bool wTrans) {
     
-    auto prim_key = KeyConstruction(input,weight,output,m,n,k,"MatMul_with_erf_src_bf16",bias);
-    auto eng = dnnl_context.getEngine();
-    auto stm = dnnl_context.getEngineStream();
-    auto& g_memory = dnnl_context.get_g_memory();
-    auto& g_mm_prim_desc = dnnl_context.get_g_mm_prim_desc();
-    auto& g_prim = dnnl_context.get_g_prim();
+    using namespace dnnl_wrappers;
 
-    dnnl::memory::dims src_tz = {m, k };
-    dnnl::memory::dims weights_tz = {k, n };
-    dnnl::memory::dims bias_tz = {1, n };
-    dnnl::memory::dims dst_tz = {m, n };
-   
-    dnnl::memory::data_type src_dt = dnnl::memory::data_type::bf16;
-    dnnl::memory::data_type weights_dt = dnnl::memory::data_type::bf16;
-    dnnl::memory::data_type bias_dt = dnnl::memory::data_type::bf16;
-    dnnl::memory::data_type dst_dt = dnnl::memory::data_type::bf16;
+    auto& eng = dnnl_context.getEngine();
+    auto& stm = dnnl_context.getEngineStream();
+    auto& g_mem = dnnl_context.get_g_memory();
 
-    auto it_prim_created = g_prim.find(prim_key);
-    if (it_prim_created == g_prim.end())
-    {
-        auto src_md     = dnnl::memory::desc({ src_tz }, src_dt, src_format);
-        auto weights_md = dnnl::memory::desc({ weights_tz }, weights_dt, weights_format);
-        auto bias_md    = dnnl::memory::desc({ bias_tz }, bias_dt, bias_format);
-        auto dst_md     = dnnl::memory::desc({ dst_tz }, dst_dt, dst_format);  
+    auto prim_key = KeyConstruction(input,weight,output,m,n,k,"MatMul_with_erf_dst_bf16",bias);
 
-        auto desc = dnnl::matmul::desc(src_md, weights_md, bias_md, dst_md);
+    const MatMulDims dims{m, n, k};
 
-        float beta = 1.0f;
+    auto input_data = DataSource(AttachMemory(eng, dims.src_tz, input));
+    auto weights_data = GCachedDataSource(prim_key + "-weights", g_mem, AttachMemory(eng, dims.weights_tz, weight, wTrans));
+    auto bias_data = GCachedDataSource(prim_key + "-bias", g_mem, AttachMemory(eng, dims.bias_tz, bias));
+    auto output_memory = AttachMemory(eng, dims.dst_tz, output);
 
-        dnnl::primitive_attr attr;
-        dnnl::post_ops po;
+    dnnl::primitive_attr attr = BuildAttrs().Eltwise(dnnl::algorithm::eltwise_gelu_erf);
 
-        po.append_eltwise(
-            1.0f, //scale
-            dnnl::algorithm::eltwise_gelu_erf,
-            0.f, // neg slope
-            0.f  /*unused for relu */ );
+    auto mat_mul = CachedMatMul<bfloat16, bfloat16, bfloat16, T_output>(prim_key, dnnl_context, m, n, k, attr);
+    mat_mul.Compute(stm, input_data, weights_data, bias_data, output_memory);
 
-        attr.set_post_ops(po);
-
-        auto prim_desc = dnnl::matmul::primitive_desc(desc, attr, eng);
-        auto prim = dnnl::matmul(prim_desc);
-
-        g_prim.emplace(prim_key, prim);
-        g_mm_prim_desc.emplace(prim_key, prim_desc);
-    }
-
-    auto user_src_md = dnnl::memory::desc(src_tz, dnnl::memory::data_type::f32, user_src_format);
-    auto user_weights_md = dnnl::memory::desc(weights_tz, dnnl::memory::data_type::f32, user_weights_format); // ab or ba
-    if (wTrans) {
-        user_weights_md = dnnl::memory::desc(weights_tz, dnnl::memory::data_type::f32, user_weights_format_trans);
-    }
-    auto user_bias_md = dnnl::memory::desc(bias_tz, dnnl::memory::data_type::f32, user_bias_format);
-
-    auto user_src_memory = dnnl::memory(user_src_md, eng, input);
-    auto user_weights_memory = dnnl::memory(user_weights_md, eng, weight);
-    auto user_bias_memory = dnnl::memory(user_bias_md, eng, bias);
-
-    auto it_prim_desc_created = g_mm_prim_desc.find(prim_key);
-    if (it_prim_desc_created == g_mm_prim_desc.end()) {
-        std::cout << "MatMul_with_erf error: can find g_mm_prim_desc = " << prim_key << std::endl;
-        return false;
-    }
-    auto prim_desc = it_prim_desc_created->second;
-
-    auto src_memory = user_src_memory;
-    auto weights_memory = user_weights_memory;
-    auto bias_memory = user_bias_memory;
-    auto dst_memory = dnnl::memory(prim_desc.dst_desc(), eng, output);
-
-    if (prim_desc.src_desc() != user_src_memory.get_desc()) {
-        src_memory = dnnl::memory(prim_desc.src_desc(), eng);
-        auto reorder_src = dnnl::reorder(user_src_memory, src_memory);
-        reorder_src.execute(stm, {
-            { DNNL_ARG_FROM, user_src_memory },
-            { DNNL_ARG_TO, src_memory } });
-    }
-
-    if (prim_desc.weights_desc() != user_weights_memory.get_desc()) {
-        std::string prim_weights_key = prim_key+"-weights";
-        auto it_memory_created = g_memory.find(prim_weights_key);
-
-        if (it_memory_created == g_memory.end()) {
-            weights_memory = dnnl::memory(prim_desc.weights_desc(), eng);
-            auto reorder_weights = dnnl::reorder(user_weights_memory, weights_memory);
-            reorder_weights.execute(stm, {
-                { DNNL_ARG_FROM, user_weights_memory },
-                { DNNL_ARG_TO, weights_memory } });
-            g_memory.emplace(prim_weights_key, weights_memory);
-        }
-        else {
-            weights_memory = it_memory_created->second;
-        }
-    }
-
-    if (prim_desc.bias_desc() != user_bias_memory.get_desc()) {
-        std::string prim_bias_key = prim_key+"-bias";
-        auto it_memory_created = g_memory.find(prim_bias_key);
-
-        if (it_memory_created == g_memory.end()) {
-            bias_memory = dnnl::memory(prim_desc.bias_desc(), eng);
-            auto reorder_bias = dnnl::reorder(user_bias_memory, bias_memory);
-            reorder_bias.execute(stm, {
-                { DNNL_ARG_FROM, user_bias_memory },
-                { DNNL_ARG_TO, bias_memory } });
-            g_memory.emplace(prim_bias_key, bias_memory);
-        }
-        else {
-            bias_memory = it_memory_created->second;
-        }
-    }
-
-    it_prim_created = g_prim.find(prim_key);
-    if (it_prim_created != g_prim.end()) {
-        it_prim_created->second.execute(stm, {
-            { DNNL_ARG_SRC, src_memory },
-            { DNNL_ARG_WEIGHTS, weights_memory },
-            { DNNL_ARG_BIAS, bias_memory },
-            { DNNL_ARG_DST, dst_memory } });
-    }
-    else {
-        std::cout << "execute error, prim_key = " << prim_key << std::endl;
-        return false;
-    }
-    stm.wait();
     return true;
 }
 
 template <typename T_input, typename T_wei, typename T_bias, typename T_output>
 bool MatMul_with_erf_src_bf16(DnnlCommon& dnnl_context, T_input* input, T_wei* weight, T_bias* bias, T_output* output, int m, int n, int k, bool wTrans)
 {
-   
+    // Expected T_input == bfloat16
+    static_assert(DnnlDataType<T_input>::value == dnnl::memory::data_type::bf16);
+    // The rest of logic similar to MatMul_with_erf<>() which supports any type T_input
+    // FIXME(rfsaliev) MatMul_with_erf<>() is not defined yet - copy-paste for now
+    using namespace dnnl_wrappers;
+
     auto prim_key = KeyConstruction(input,weight,output,m,n,k,"MatMul_with_erf_src_bf16",bias);
-    auto eng = dnnl_context.getEngine();
-    auto stm = dnnl_context.getEngineStream();
-    auto& g_memory = dnnl_context.get_g_memory();
-    auto& g_mm_prim_desc = dnnl_context.get_g_mm_prim_desc();
-    auto& g_prim = dnnl_context.get_g_prim();
 
-    dnnl::memory::dims src_tz = {m, k };
-    dnnl::memory::dims weights_tz = {k, n };
-    dnnl::memory::dims bias_tz = {1, n };
-    dnnl::memory::dims dst_tz = {m, n };
-   
-#if 1
-    dnnl::memory::data_type src_dt = dnnl::memory::data_type::bf16;
-    dnnl::memory::data_type weights_dt = dnnl::memory::data_type::bf16;
-    dnnl::memory::data_type bias_dt = dnnl::memory::data_type::f32;
-    dnnl::memory::data_type dst_dt = dnnl::memory::data_type::f32;
-#else
-    dnnl::memory::data_type src_dt = dnnl::memory::data_type::f32;
-    dnnl::memory::data_type weights_dt = dnnl::memory::data_type::f32;
-    dnnl::memory::data_type bias_dt = dnnl::memory::data_type::f32;
-    dnnl::memory::data_type dst_dt = dnnl::memory::data_type::f32;
-#endif
-
-    auto it_prim_created = g_prim.find(prim_key);
-    if (it_prim_created == g_prim.end())
-    {
-        auto src_md     = dnnl::memory::desc({ src_tz }, src_dt, src_format);
-        auto weights_md = dnnl::memory::desc({ weights_tz }, weights_dt, weights_format);
-        auto bias_md    = dnnl::memory::desc({ bias_tz }, bias_dt, bias_format);
-        auto dst_md     = dnnl::memory::desc({ dst_tz }, dst_dt, dst_format);  
-
-        auto desc = dnnl::matmul::desc(src_md, weights_md, bias_md, dst_md);
-
-        float beta = 1.0f;
-
-        dnnl::primitive_attr attr;
-        dnnl::post_ops po;
-
-        po.append_eltwise(
-            1.0f, //scale
-            dnnl::algorithm::eltwise_gelu_erf,
-            0.f, // neg slope
-            0.f  /*unused for relu */ );
-
-        attr.set_post_ops(po);
-
-        auto prim_desc = dnnl::matmul::primitive_desc(desc, attr, eng);
-        auto prim = dnnl::matmul(prim_desc);
-
-        g_prim.emplace(prim_key, prim);
-        g_mm_prim_desc.emplace(prim_key, prim_desc);
-    }
-
-    auto user_src_md = dnnl::memory::desc(src_tz, dnnl::memory::data_type::bf16, user_src_format);
-    auto user_weights_md = dnnl::memory::desc(weights_tz, dnnl::memory::data_type::f32, user_weights_format); // ab or ba
-    if (wTrans) {
-        user_weights_md = dnnl::memory::desc(weights_tz, dnnl::memory::data_type::f32, user_weights_format_trans);
-    }
-    auto user_bias_md = dnnl::memory::desc(bias_tz, dnnl::memory::data_type::f32, user_bias_format);
-
-    auto user_src_memory = dnnl::memory(user_src_md, eng, input);
-    auto user_weights_memory = dnnl::memory(user_weights_md, eng, weight);
-    auto user_bias_memory = dnnl::memory(user_bias_md, eng, bias);
-
-    auto it_prim_desc_created = g_mm_prim_desc.find(prim_key);
-    if (it_prim_desc_created == g_mm_prim_desc.end()) {
-        std::cout << "MatMul_with_erf error: can find g_mm_prim_desc = " << prim_key << std::endl;
-        return false;
-    }
-    auto prim_desc = it_prim_desc_created->second;
-
-    auto src_memory = user_src_memory;
-    auto weights_memory = user_weights_memory;
-    auto bias_memory = user_bias_memory;
-    auto dst_memory = dnnl::memory(prim_desc.dst_desc(), eng, output);
-
-    if (prim_desc.src_desc() != user_src_memory.get_desc()) {
-        src_memory = dnnl::memory(prim_desc.src_desc(), eng);
-        auto reorder_src = dnnl::reorder(user_src_memory, src_memory);
-        reorder_src.execute(stm, {
-            { DNNL_ARG_FROM, user_src_memory },
-            { DNNL_ARG_TO, src_memory } });
-    }
-
-    if (prim_desc.weights_desc() != user_weights_memory.get_desc()) {
-        std::string prim_weights_key = prim_key+"-weights";
-        auto it_memory_created = g_memory.find(prim_weights_key);
-
-        if (it_memory_created == g_memory.end()) {
-            weights_memory = dnnl::memory(prim_desc.weights_desc(), eng);
-            auto reorder_weights = dnnl::reorder(user_weights_memory, weights_memory);
-            reorder_weights.execute(stm, {
-                { DNNL_ARG_FROM, user_weights_memory },
-                { DNNL_ARG_TO, weights_memory } });
-            g_memory.emplace(prim_weights_key, weights_memory);
-        }
-        else {
-            weights_memory = it_memory_created->second;
-        }
-    }
-
-    if (prim_desc.bias_desc() != user_bias_memory.get_desc()) {
-        std::string prim_bias_key = prim_key+"-bias";
-        auto it_memory_created = g_memory.find(prim_bias_key);
-
-        if (it_memory_created == g_memory.end()) {
-            bias_memory = dnnl::memory(prim_desc.bias_desc(), eng);
-            auto reorder_bias = dnnl::reorder(user_bias_memory, bias_memory);
-            reorder_bias.execute(stm, {
-                { DNNL_ARG_FROM, user_bias_memory },
-                { DNNL_ARG_TO, bias_memory } });
-            g_memory.emplace(prim_bias_key, bias_memory);
-        }
-        else {
-            bias_memory = it_memory_created->second;
-        }
-    }
-
-    it_prim_created = g_prim.find(prim_key);
-    if (it_prim_created != g_prim.end()) {
-        it_prim_created->second->execute(stm, {
-            { DNNL_ARG_SRC, src_memory },
-            { DNNL_ARG_WEIGHTS, weights_memory },
-            { DNNL_ARG_BIAS, bias_memory },
-            { DNNL_ARG_DST, dst_memory } });
-    }
-    else {
-        std::cout << "MatMul_with_erf: execute error, prim_key = " << prim_key << std::endl;
-        return false;
-    }
-    stm.wait();
-    return true;
+    return MatMul_noquant(prim_key, dnnl_context,
+                          input, weight, bias, output,
+                          m, n, k, wTrans,
+                          BuildAttrs().Eltwise(dnnl::algorithm::eltwise_gelu_erf));
 }
 
 template <typename T_input, typename T_wei, typename T_bias, typename T_output>
 bool MatMul_with_erf(DnnlCommon& dnnl_context, T_input* input, T_wei* weight, T_bias* bias, T_output* output, int m, int n, int k, bool wTrans) {
-   
+    using namespace dnnl_wrappers;
+
     auto prim_key = KeyConstruction(input,weight,output,m,n,k,"MatMul_with_erf",bias);
-    auto eng = dnnl_context.getEngine();
-    auto stm = dnnl_context.getEngineStream();
-    auto& g_memory = dnnl_context.get_g_memory();
-    auto& g_mm_prim_desc = dnnl_context.get_g_mm_prim_desc();
-    auto& g_prim = dnnl_context.get_g_prim();
 
-    dnnl::memory::dims src_tz = { m, k };
-    dnnl::memory::dims weights_tz = { k, n };
-    dnnl::memory::dims bias_tz = { 1, n };
-    dnnl::memory::dims dst_tz = { m, n };
-   
-#if 1
-    dnnl::memory::data_type src_dt = dnnl::memory::data_type::bf16;
-    dnnl::memory::data_type weights_dt = dnnl::memory::data_type::bf16;
-    dnnl::memory::data_type bias_dt = dnnl::memory::data_type::f32;
-    dnnl::memory::data_type dst_dt = dnnl::memory::data_type::f32;
-#else
-    dnnl::memory::data_type src_dt = dnnl::memory::data_type::f32;
-    dnnl::memory::data_type weights_dt = dnnl::memory::data_type::f32;
-    dnnl::memory::data_type bias_dt = dnnl::memory::data_type::f32;
-    dnnl::memory::data_type dst_dt = dnnl::memory::data_type::f32;
-#endif
-
-    auto it_prim_created = g_prim.find(prim_key);
-    if (it_prim_created == g_prim.end())
-    {
-        auto src_md     = dnnl::memory::desc({ src_tz }, src_dt, src_format);
-        auto weights_md = dnnl::memory::desc({ weights_tz }, weights_dt, weights_format);
-        auto bias_md    = dnnl::memory::desc({ bias_tz }, bias_dt, bias_format);
-        auto dst_md     = dnnl::memory::desc({ dst_tz }, dst_dt, dst_format);  
-
-        auto desc = dnnl::matmul::desc(src_md, weights_md, bias_md, dst_md);
-
-        float beta = 1.0f;
-
-        dnnl::primitive_attr attr;
-        dnnl::post_ops po;
-
-        po.append_eltwise(
-            1.0f, //scale
-            dnnl::algorithm::eltwise_gelu_erf,
-            0.f, // neg slope
-            0.f  /*unused for relu */ );
-
-        attr.set_post_ops(po);
-
-        auto prim_desc = dnnl::matmul::primitive_desc(desc, attr, eng);
-        auto prim = dnnl::matmul(prim_desc);
-
-        g_prim.emplace(prim_key, prim);
-        g_mm_prim_desc.emplace(prim_key, prim_desc);
-    }
-
-    auto user_src_md = dnnl::memory::desc(src_tz, dnnl::memory::data_type::f32, user_src_format);
-    auto user_weights_md = dnnl::memory::desc(weights_tz, dnnl::memory::data_type::f32, user_weights_format); // ab or ba
-    if (wTrans) {
-        user_weights_md = dnnl::memory::desc(weights_tz, dnnl::memory::data_type::f32, user_weights_format_trans);
-    }
-    auto user_bias_md = dnnl::memory::desc(bias_tz, dnnl::memory::data_type::f32, user_bias_format);
-
-    auto user_src_memory = dnnl::memory(user_src_md, eng, input);
-    auto user_weights_memory = dnnl::memory(user_weights_md, eng, weight);
-    auto user_bias_memory = dnnl::memory(user_bias_md, eng, bias);
-
-    auto it_prim_desc_created = g_mm_prim_desc.find(prim_key);
-    if (it_prim_desc_created == g_mm_prim_desc.end()) {
-        std::cout << "MatMul_with_erf error: can find g_mm_prim_desc = " << prim_key << std::endl;
-        return false;
-    }
-    auto prim_desc = it_prim_desc_created->second;
-
-    auto src_memory = user_src_memory;
-    auto weights_memory = user_weights_memory;
-    auto bias_memory = user_bias_memory;
-    auto dst_memory = dnnl::memory(prim_desc.dst_desc(), eng, output);
-
-    if (prim_desc.src_desc() != user_src_memory.get_desc()) {
-        src_memory = dnnl::memory(prim_desc.src_desc(), eng);
-        auto reorder_src = dnnl::reorder(user_src_memory, src_memory);
-        reorder_src.execute(stm, {
-            { DNNL_ARG_FROM, user_src_memory },
-            { DNNL_ARG_TO, src_memory } });
-    }
-
-    if (prim_desc.weights_desc() != user_weights_memory.get_desc()) {
-        std::string prim_weights_key = prim_key+"-weights";
-        auto it_memory_created = g_memory.find(prim_weights_key);
-
-        if (it_memory_created == g_memory.end()) {
-            weights_memory = dnnl::memory(prim_desc.weights_desc(), eng);
-            auto reorder_weights = dnnl::reorder(user_weights_memory, weights_memory);
-            reorder_weights.execute(stm, {
-                { DNNL_ARG_FROM, user_weights_memory },
-                { DNNL_ARG_TO, weights_memory } });
-            g_memory.emplace(prim_weights_key, weights_memory);
-        }
-        else {
-            weights_memory = it_memory_created->second;
-        }
-    }
-
-    if (prim_desc.bias_desc() != user_bias_memory.get_desc()) {
-        std::string prim_bias_key = prim_key+"-bias";
-        auto it_memory_created = g_memory.find(prim_bias_key);
-
-        if (it_memory_created == g_memory.end()) {
-            bias_memory = dnnl::memory(prim_desc.bias_desc(), eng);
-            auto reorder_bias = dnnl::reorder(user_bias_memory, bias_memory);
-            reorder_bias.execute(stm, {
-                { DNNL_ARG_FROM, user_bias_memory },
-                { DNNL_ARG_TO, bias_memory } });
-            g_memory.emplace(prim_bias_key, bias_memory);
-        }
-        else {
-            bias_memory = it_memory_created->second;
-        }
-    }
-
-    it_prim_created = g_prim.find(prim_key);
-    if (it_prim_created != g_prim.end()) {
-        it_prim_created->second.execute(stm, {
-            { DNNL_ARG_SRC, src_memory },
-            { DNNL_ARG_WEIGHTS, weights_memory },
-            { DNNL_ARG_BIAS, bias_memory },
-            { DNNL_ARG_DST, dst_memory } });
-    }
-    else {
-        std::cout << "MatMul_with_erf: execute error, prim_key = " << prim_key << std::endl;
-        return false;
-    }
-    stm.wait();
-    return true;
+    return MatMul_noquant(prim_key, dnnl_context,
+                          input, weight, bias, output,
+                          m, n, k, wTrans,
+                          BuildAttrs().Eltwise(dnnl::algorithm::eltwise_gelu_erf));
 }
-
 
 template <typename T_input, typename T_wei, typename T_bias, typename T_output>
 bool MatMul_with_sum(DnnlCommon& dnnl_context, T_input* input, T_wei* weight, T_bias* bias, T_output* output, int m, int n, int k, bool wTrans) {
-    
+    using namespace dnnl_wrappers;
+
     auto prim_key = KeyConstruction(input,weight,output,m,n,k,"MatMul_with_sum",bias);
-    auto eng = dnnl_context.getEngine();
-    auto stm = dnnl_context.getEngineStream();
-    auto& g_memory = dnnl_context.get_g_memory();
-    auto& g_mm_prim_desc = dnnl_context.get_g_mm_prim_desc();
-    auto& g_prim = dnnl_context.get_g_prim();
 
-    dnnl::memory::dims src_tz = { m, k };
-    dnnl::memory::dims weights_tz = {k, n };
-    dnnl::memory::dims bias_tz = { 1, n };
-    dnnl::memory::dims dst_tz = {m, n };
-   
-#if 1
-    dnnl::memory::data_type src_dt = dnnl::memory::data_type::bf16;
-    dnnl::memory::data_type weights_dt = dnnl::memory::data_type::bf16;
-    dnnl::memory::data_type bias_dt = dnnl::memory::data_type::f32;
-    dnnl::memory::data_type dst_dt = dnnl::memory::data_type::f32;
-#else
-    dnnl::memory::data_type src_dt = dnnl::memory::data_type::f32;
-    dnnl::memory::data_type weights_dt = dnnl::memory::data_type::f32;
-    dnnl::memory::data_type bias_dt = dnnl::memory::data_type::f32;
-    dnnl::memory::data_type dst_dt = dnnl::memory::data_type::f32;
-#endif
-
-    auto it_prim_created = g_prim.find(prim_key);
-    if (it_prim_created == g_prim.end())
-    {
-        auto src_md     = dnnl::memory::desc({ src_tz }, src_dt, src_format);
-        auto weights_md = dnnl::memory::desc({ weights_tz }, weights_dt, weights_format);
-        auto bias_md    = dnnl::memory::desc({ bias_tz }, bias_dt, bias_format);
-        auto dst_md     = dnnl::memory::desc({ dst_tz }, dst_dt, dst_format); 
-
-
-        auto desc = dnnl::matmul::desc(src_md, weights_md, bias_md, dst_md);
-
-        float beta = 1.0f;
-        
-        dnnl::primitive_attr attr;
-        dnnl::post_ops po;
-            
-        po.append_sum(beta);
-        attr.set_post_ops(po);
-
-        auto prim_desc = dnnl::matmul::primitive_desc(desc, attr, eng);
-        auto prim = dnnl::matmul(prim_desc);
-
-        g_prim.emplace(prim_key, prim);
-        g_mm_prim_desc.emplace(prim_key, prim_desc);
-    }
-
-    auto user_src_md = dnnl::memory::desc(src_tz, dnnl::memory::data_type::f32, user_src_format);
-    auto user_weights_md = dnnl::memory::desc(weights_tz, dnnl::memory::data_type::f32, user_weights_format); // ab or ba
-    if (wTrans) {
-        user_weights_md = dnnl::memory::desc(weights_tz, dnnl::memory::data_type::f32, user_weights_format_trans);
-    }
-    auto user_bias_md = dnnl::memory::desc(bias_tz, dnnl::memory::data_type::f32, user_bias_format);
-
-    auto user_src_memory = dnnl::memory(user_src_md, eng, input);
-    auto user_weights_memory = dnnl::memory(user_weights_md, eng, weight);
-    auto user_bias_memory = dnnl::memory(user_bias_md, eng, bias);
-
-    auto it_prim_desc_created = g_mm_prim_desc.find(prim_key);
-    if (it_prim_desc_created == g_mm_prim_desc.end()) {
-        std::cout << "MatMul_with_sum error: can find g_mm_prim_desc = " << prim_key << std::endl;
-        return false;
-    }
-    auto prim_desc = it_prim_desc_created->second;
-
-    auto src_memory = user_src_memory;
-    auto weights_memory = user_weights_memory;
-    auto bias_memory = user_bias_memory;
-    auto dst_memory = dnnl::memory(prim_desc.dst_desc(), eng, output);
-
-    if (prim_desc.src_desc() != user_src_memory.get_desc()) {
-        src_memory = dnnl::memory(prim_desc.src_desc(), eng);
-        auto reorder_src = dnnl::reorder(user_src_memory, src_memory);
-        reorder_src.execute(stm, {
-            { DNNL_ARG_FROM, user_src_memory },
-            { DNNL_ARG_TO, src_memory } });
-    }
-
-    if (prim_desc.weights_desc() != user_weights_memory.get_desc()) {
-        std::string prim_weights_key = prim_key+"-weights";
-        auto it_memory_created = g_memory.find(prim_weights_key);
-
-        if (it_memory_created == g_memory.end()) {
-            weights_memory = dnnl::memory(prim_desc.weights_desc(), eng);
-            auto reorder_weights = dnnl::reorder(user_weights_memory, weights_memory);
-            reorder_weights.execute(stm, {
-                { DNNL_ARG_FROM, user_weights_memory },
-                { DNNL_ARG_TO, weights_memory } });
-            g_memory.emplace(prim_weights_key, weights_memory);
-        }
-        else {
-            weights_memory = it_memory_created->second;
-        }
-    }
-
-    if (prim_desc.bias_desc() != user_bias_memory.get_desc()) {
-        std::string prim_bias_key = prim_key+"-bias";
-        auto it_memory_created = g_memory.find(prim_bias_key);
-
-        if (it_memory_created == g_memory.end()) {
-            bias_memory = dnnl::memory(prim_desc.bias_desc(), eng);
-            auto reorder_bias = dnnl::reorder(user_bias_memory, bias_memory);
-            reorder_bias.execute(stm, {
-                { DNNL_ARG_FROM, user_bias_memory },
-                { DNNL_ARG_TO, bias_memory } });
-            g_memory.emplace(prim_bias_key, bias_memory);
-        }
-        else {
-            bias_memory = it_memory_created->second;
-        }
-    }
-
-    it_prim_created = g_prim.find(prim_key);
-    if (it_prim_created != g_prim.end()) {
-        it_prim_created->second.execute(stm, {
-            { DNNL_ARG_SRC, src_memory },
-            { DNNL_ARG_WEIGHTS, weights_memory },
-            { DNNL_ARG_BIAS, bias_memory },
-            { DNNL_ARG_DST, dst_memory } });
-    }
-    else {
-        std::cout << "MatMul_with_sum: execute error, prim_key = " << prim_key << std::endl;
-        return false;
-    }
-    stm.wait();
-    return true;
+    float beta = 1.0f;
+    return MatMul_noquant(prim_key, dnnl_context,
+                          input, weight, bias, output,
+                          m, n, k, wTrans,
+                          BuildAttrs().Sum(beta));
 }
 
 template <typename T_input, typename T_wei, typename T_bias, typename T_output>
 bool MatMul_with_sum_src_bf16(DnnlCommon& dnnl_context, T_input* input, T_wei* weight, T_bias* bias, T_output* output, int m, int n, int k, bool wTrans) {
-   
+    // Expected T_input == bfloat16
+    static_assert(DnnlDataType<T_input>::value == dnnl::memory::data_type::bf16);
+    // FIXME(rfsaliev) The rest of logic similar to MatMul_with_sum<>() which supports any type T_input except prim_key
+    using namespace dnnl_wrappers;
+
     auto prim_key = KeyConstruction(input,weight,output,m,n,k,"MatMul_with_sum_src_bf16",bias);
-    auto eng = dnnl_context.getEngine();
-    auto stm = dnnl_context.getEngineStream();
-    auto& g_memory = dnnl_context.get_g_memory();
-    auto& g_mm_prim_desc = dnnl_context.get_g_mm_prim_desc();
-    auto& g_prim = dnnl_context.get_g_prim();
-    dnnl::memory::dims src_tz = { m, k };
-    dnnl::memory::dims weights_tz = {k, n };
-    dnnl::memory::dims bias_tz = { 1, n };
-    dnnl::memory::dims dst_tz = {m, n };
-   
-    dnnl::memory::data_type src_dt = dnnl::memory::data_type::bf16;
-    dnnl::memory::data_type weights_dt = dnnl::memory::data_type::bf16;
-    dnnl::memory::data_type bias_dt = dnnl::memory::data_type::f32;
-    dnnl::memory::data_type dst_dt = dnnl::memory::data_type::f32;
 
-    auto it_prim_created = g_prim.find(prim_key);
-    if (it_prim_created == g_prim.end())
-    {
-        auto src_md     = dnnl::memory::desc({ src_tz }, src_dt, src_format);
-        auto weights_md = dnnl::memory::desc({ weights_tz }, weights_dt, weights_format);
-        auto bias_md    = dnnl::memory::desc({ bias_tz }, bias_dt, bias_format);
-        auto dst_md     = dnnl::memory::desc({ dst_tz }, dst_dt, dst_format); 
-
-        auto desc = dnnl::matmul::desc(src_md, weights_md, bias_md, dst_md);
-
-        float beta = 1.0f;
-
-        dnnl::primitive_attr attr;
-        dnnl::post_ops po;
-            
-        po.append_sum(beta);
-        attr.set_post_ops(po);
-
-        auto prim_desc = dnnl::matmul::primitive_desc(desc, attr, eng);
-        auto prim = dnnl::matmul(prim_desc);
-
-        g_prim.emplace(prim_key, prim);
-        g_mm_prim_desc.emplace(prim_key, prim_desc);
-    }
-
-    auto user_src_md = dnnl::memory::desc(src_tz, dnnl::memory::data_type::bf16, user_src_format);
-    auto user_weights_md = dnnl::memory::desc(weights_tz, dnnl::memory::data_type::f32, user_weights_format); // ab or ba
-    if (wTrans) {
-        user_weights_md = dnnl::memory::desc(weights_tz, dnnl::memory::data_type::f32, user_weights_format_trans);
-    }
-    auto user_bias_md = dnnl::memory::desc(bias_tz, dnnl::memory::data_type::f32, user_bias_format);
-
-    auto user_src_memory = dnnl::memory(user_src_md, eng, input);
-    auto user_weights_memory = dnnl::memory(user_weights_md, eng, weight);
-    auto user_bias_memory = dnnl::memory(user_bias_md, eng, bias);
-
-    auto it_prim_desc_created = g_mm_prim_desc.find(prim_key);
-    if (it_prim_desc_created == g_mm_prim_desc.end()) {
-        std::cout << "MatMul_with_sum_src_bf16 error: can find g_mm_prim_desc = " << prim_key << std::endl;
-        return false;
-    }
-    auto prim_desc = it_prim_desc_created->second;
-
-    auto src_memory = user_src_memory;
-    auto weights_memory = user_weights_memory;
-    auto bias_memory = user_bias_memory;
-    auto dst_memory = dnnl::memory(prim_desc.dst_desc(), eng, output);
-
-    if (prim_desc.src_desc() != user_src_memory.get_desc()) {
-        src_memory = dnnl::memory(prim_desc.src_desc(), eng);
-        auto reorder_src = dnnl::reorder(user_src_memory, src_memory);
-        reorder_src.execute(stm, {
-            { DNNL_ARG_FROM, user_src_memory },
-            { DNNL_ARG_TO, src_memory } });
-    }
-
-    if (prim_desc.weights_desc() != user_weights_memory.get_desc()) {
-        std::string prim_weights_key = prim_key+"-weights";
-        auto it_memory_created = g_memory.find(prim_weights_key);
-
-        if (it_memory_created == g_memory.end()) {
-            weights_memory = dnnl::memory(prim_desc.weights_desc(), eng);
-            auto reorder_weights = dnnl::reorder(user_weights_memory, weights_memory);
-            reorder_weights.execute(stm, {
-                { DNNL_ARG_FROM, user_weights_memory },
-                { DNNL_ARG_TO, weights_memory } });
-            g_memory.emplace(prim_weights_key, weights_memory);
-        }
-        else {
-            weights_memory = it_memory_created->second;
-        }
-    }
-
-    if (prim_desc.bias_desc() != user_bias_memory.get_desc()) {
-        std::string prim_bias_key = prim_key+"-bias";
-        auto it_memory_created = g_memory.find(prim_bias_key);
-
-        if (it_memory_created == g_memory.end()) {
-            bias_memory = dnnl::memory(prim_desc.bias_desc(), eng);
-            auto reorder_bias = dnnl::reorder(user_bias_memory, bias_memory);
-            reorder_bias.execute(stm, {
-                { DNNL_ARG_FROM, user_bias_memory },
-                { DNNL_ARG_TO, bias_memory } });
-            g_memory.emplace(prim_bias_key, bias_memory);
-        }
-        else {
-            bias_memory = it_memory_created->second;
-        }
-    }
-
-    it_prim_created = g_prim.find(prim_key);
-    if (it_prim_created != g_prim.end()) {
-        it_prim_created->second.execute(stm, {
-            { DNNL_ARG_SRC, src_memory },
-            { DNNL_ARG_WEIGHTS, weights_memory },
-            { DNNL_ARG_BIAS, bias_memory },
-            { DNNL_ARG_DST, dst_memory } });
-    }
-    else {
-        std::cout << "MatMul_with_sum_src_bf16: execute error, prim_key = " << prim_key << std::endl;
-        return false;
-    }
-    stm.wait();
-    return true;
+    float beta = 1.0f;
+    return MatMul_noquant(prim_key, dnnl_context,
+                          input, weight, bias, output,
+                          m, n, k, wTrans,
+                          BuildAttrs().Sum(beta));
 }
 
 
 template <typename T_input, typename T_wei, typename T_bias, typename T_output>
 bool MatMul_with_bias(DnnlCommon& dnnl_context, T_input* input, T_wei* weight, T_bias* bias, T_output* output, int m, int n, int k, bool wTrans) {
-    
-    auto eng = dnnl_context.getEngine();
-    auto stm = dnnl_context.getEngineStream();
+    using namespace dnnl_wrappers;
+
     auto prim_key = KeyConstruction(input,weight,output,m,n,k,"MatMul_with_bias",bias);
-    auto& g_memory = dnnl_context.get_g_memory();
-    auto& g_mm_prim_desc = dnnl_context.get_g_mm_prim_desc();
-    auto& g_prim = dnnl_context.get_g_prim();
 
-    dnnl::memory::dims src_tz = { m, k };
-    dnnl::memory::dims weights_tz = {k, n };
-    dnnl::memory::dims bias_tz = { 1, n };
-    dnnl::memory::dims dst_tz = {m, n };
-   
-#if 1
-    dnnl::memory::data_type src_dt = dnnl::memory::data_type::bf16;
-    dnnl::memory::data_type weights_dt = dnnl::memory::data_type::bf16;
-    dnnl::memory::data_type bias_dt = dnnl::memory::data_type::f32;
-    dnnl::memory::data_type dst_dt = dnnl::memory::data_type::f32;
-#else
-    dnnl::memory::data_type src_dt = dnnl::memory::data_type::f32;
-    dnnl::memory::data_type weights_dt = dnnl::memory::data_type::f32;
-    dnnl::memory::data_type bias_dt = dnnl::memory::data_type::f32;
-    dnnl::memory::data_type dst_dt = dnnl::memory::data_type::f32;
-#endif
-
-    auto it_prim_created = g_prim.find(prim_key);
-    if (it_prim_created == g_prim.end())
-    {
-        auto src_md     = dnnl::memory::desc({ src_tz }, src_dt, src_format);
-        auto weights_md = dnnl::memory::desc({ weights_tz }, weights_dt, weights_format);
-        auto bias_md    = dnnl::memory::desc({ bias_tz }, bias_dt, bias_format);
-        auto dst_md     = dnnl::memory::desc({ dst_tz }, dst_dt, dst_format);  
-
-        auto desc = dnnl::matmul::desc(src_md, weights_md, bias_md, dst_md);
-
-        auto prim_desc = dnnl::matmul::primitive_desc(desc, eng);
-        auto prim = dnnl::matmul(prim_desc);
-
-        g_prim.emplace(prim_key, prim);
-        g_mm_prim_desc.emplace(prim_key, prim_desc);
-    }
-
-    auto user_src_md = dnnl::memory::desc(src_tz, dnnl::memory::data_type::f32, user_src_format);
-    auto user_weights_md = dnnl::memory::desc(weights_tz, dnnl::memory::data_type::f32, user_weights_format); // ab or ba
-    if (wTrans) {
-        user_weights_md = dnnl::memory::desc(weights_tz, dnnl::memory::data_type::f32, user_weights_format_trans);
-    }
-    auto user_bias_md = dnnl::memory::desc(bias_tz, dnnl::memory::data_type::f32, user_bias_format);
-
-    auto user_src_memory = dnnl::memory(user_src_md, eng, input);
-    auto user_weights_memory = dnnl::memory(user_weights_md, eng, weight);
-    auto user_bias_memory = dnnl::memory(user_bias_md, eng, bias);
-
-    auto it_prim_desc_created = g_mm_prim_desc.find(prim_key);
-    if (it_prim_desc_created == g_mm_prim_desc.end()) {
-        std::cout << "MatMul_with_bias error: can find g_mm_prim_desc = " << prim_key << std::endl;
-        return false;
-    }
-    auto prim_desc = it_prim_desc_created->second;
-
-    auto src_memory = user_src_memory;
-    auto weights_memory = user_weights_memory;
-    auto bias_memory = user_bias_memory;
-    auto dst_memory = dnnl::memory(prim_desc.dst_desc(), eng, output);
-
-    if (prim_desc.src_desc() != user_src_memory.get_desc()) {
-        src_memory = dnnl::memory(prim_desc.src_desc(), eng);
-        auto reorder_src = dnnl::reorder(user_src_memory, src_memory);
-        reorder_src.execute(stm, {
-            { DNNL_ARG_FROM, user_src_memory },
-            { DNNL_ARG_TO, src_memory } });
-    }
-
-    if (prim_desc.weights_desc() != user_weights_memory.get_desc()) {
-        std::string prim_weights_key = prim_key+"-weights";
-        auto it_memory_created = g_memory.find(prim_weights_key);
-
-        if (it_memory_created == g_memory.end()) {
-            weights_memory = dnnl::memory(prim_desc.weights_desc(), eng);
-            auto reorder_weights = dnnl::reorder(user_weights_memory, weights_memory);
-            reorder_weights.execute(stm, {
-                { DNNL_ARG_FROM, user_weights_memory },
-                { DNNL_ARG_TO, weights_memory } });
-            g_memory.emplace(prim_weights_key, weights_memory);
-        }
-        else {
-            weights_memory = it_memory_created->second;
-        }
-    }
-
-    if (prim_desc.bias_desc() != user_bias_memory.get_desc()) {
-        std::string prim_bias_key = prim_key+"-bias";
-        auto it_memory_created = g_memory.find(prim_bias_key);
-
-        if (it_memory_created == g_memory.end()) {
-            bias_memory = dnnl::memory(prim_desc.bias_desc(), eng);
-            auto reorder_bias = dnnl::reorder(user_bias_memory, bias_memory);
-            reorder_bias.execute(stm, {
-                { DNNL_ARG_FROM, user_bias_memory },
-                { DNNL_ARG_TO, bias_memory } });
-            g_memory.emplace(prim_bias_key, bias_memory);
-        }
-        else {
-            bias_memory = it_memory_created->second;
-        }
-    }
-
-    it_prim_created = g_prim.find(prim_key);
-    if (it_prim_created != g_prim.end()) {
-        it_prim_created->second.execute(stm, {
-            { DNNL_ARG_SRC, src_memory },
-            { DNNL_ARG_WEIGHTS, weights_memory },
-            { DNNL_ARG_BIAS, bias_memory },
-            { DNNL_ARG_DST, dst_memory } });
-    }
-    else {
-        std::cout << "MatMul_with_bias: execute error, prim_key = " << prim_key << std::endl;
-        return false;
-    }
-    stm.wait();
-    return true;
+    return MatMul_noquant(prim_key, dnnl_context,
+                          input, weight, bias, output,
+                          m, n, k, wTrans);
 }
 
 #endif

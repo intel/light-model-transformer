@@ -6,40 +6,27 @@
 #define __DNNL_SOFTMAX__
 
 #include "dnnl_common.h"
-
+#include "dnnl_attr.hpp"
+#include "dnnl_data.hpp"
+#include "dnnl_ops.hpp"
 
 template <typename T_input>
 bool Softmax(DnnlCommon& dnnl_context, T_input* input, int m, int n) {
-    auto eng = dnnl_context.getEngine();
-    auto stm = dnnl_context.getEngineStream();
-    dnnl::memory::dims src_tz = {m, n};
-    dnnl::memory::data_type src_dt = dnnl::memory::data_type::f32;
+    using namespace dnnl_wrappers;
 
-    auto src_md = dnnl::memory::desc(src_tz, src_dt, dnnl::memory::format_tag::nc);
+    auto& eng = dnnl_context.getEngine();
+    auto& stm = dnnl_context.getEngineStream();
+
+    auto prim_key = KeyConstruction(input,input,input,m,n,"Softmax");
+
+    dnnl::memory::dims data_tz = {m, n};
+
+    auto data_memory = AttachMemory(eng, data_tz, input);
+    auto input_data = DataSource(data_memory);
 
     const int axis = 1;
-    auto softmax_d = dnnl::softmax_forward::desc(dnnl::prop_kind::forward_inference, src_md, axis);
-    auto softmax_pd = dnnl::softmax_forward::primitive_desc(softmax_d, eng);
-    auto softmax_prim = dnnl::softmax_forward(softmax_pd);
-
-    auto user_src_md = dnnl::memory::desc(src_tz, dnnl::memory::data_type::f32, dnnl::memory::format_tag::nc);
-    auto user_src_memory = dnnl::memory(user_src_md, eng, input);
-
-    auto src_memory = user_src_memory;
-
-    if (softmax_pd.src_desc() != user_src_memory.get_desc()) {
-        src_memory = dnnl::memory(softmax_pd.src_desc(), eng);
-        auto reorder_src = dnnl::reorder(user_src_memory, src_memory);
-        reorder_src.execute(stm, {
-            { DNNL_ARG_FROM, user_src_memory },
-            { DNNL_ARG_TO, src_memory } });
-    }
-
-    softmax_prim.execute(stm, {
-        { DNNL_ARG_SRC, src_memory },
-        { DNNL_ARG_DST, src_memory } });
-    
-    stm.wait();
+    auto softmax = CachedSoftmax<float>(prim_key, dnnl_context, m, n, axis);
+    softmax.Compute(stm, input_data, data_memory);
     return true;
 }
 
