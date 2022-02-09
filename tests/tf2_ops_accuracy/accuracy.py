@@ -21,6 +21,10 @@ if __name__ == '__main__':
                         type=str, help='Path to the BERT model.')
     parser.add_argument('op_library', metavar='op-library',
                         type=str, help='Path to the .so containing the BertOp.')
+    parser.add_argument('--out-file', type=str, help='Path to the output .csv file.')
+
+    parser.add_argument('-v', '--verbose', dest='verbose', action='store_true',
+                        help='Print progress while running and a list of every label-prediction pair.')
 
     args = parser.parse_args()
 
@@ -44,14 +48,13 @@ if __name__ == '__main__':
 
     print('### Testing the model.')
 
-    count = len(validation_dataset['label'])
-    # count = 10
+    total_samples = len(validation_dataset['label'])
 
-    labels = validation_dataset['label'][:count]
+    labels = validation_dataset['label'][:total_samples]
 
     # Force batch size 1
     results = []
-    for i in range(count):
+    for i in range(total_samples):
         res = model([
             validation_dataset['sentence1'][i:i+1],
             validation_dataset['sentence2'][i:i+1]
@@ -59,14 +62,20 @@ if __name__ == '__main__':
         res = np.argmax(res.numpy())
         results.append(res)
 
-        s = f'Testing: {i :>3} / {count : <3}'
-        print(f"{s}{' ' * (os.get_terminal_size().columns - len(s))}",
-              end='\r', flush=True)
+        if args.verbose:
+            s = f'Testing: {i :>3} / {total_samples : <3}'
+            print(f"{s}{' ' * (os.get_terminal_size().columns - len(s))}",
+                end='\r', flush=True)
 
-    print(f"{'Label' : <10} | {'Response' : <10}")
-    for i in range(count):
-        print(f'{labels[i] : <10} | {results[i] : <10}')
+    if args.verbose:
+        print(f"{'Label' : <10} | {'Response' : <10}")
+        for i in range(total_samples):
+            print(f'{labels[i] : <10} | {results[i] : <10}')
 
     correct = np.sum(results == labels)
-    accuracy = correct / count
-    print(f'Accuracy: {correct} / {count} - {accuracy * 100}%')
+    accuracy = correct / total_samples
+    print(f'Accuracy: {correct} / {total_samples} - {accuracy * 100}%')
+    
+    if args.out_file is not None:
+        with open(args.out_file, 'a') as f:
+            f.write('%s\t%s\t%d/%d\t%f\n' % (args.model_dir, tf.__version__, correct, total_samples, correct / total_samples))
