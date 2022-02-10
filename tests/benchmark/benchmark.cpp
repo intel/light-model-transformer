@@ -2,16 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-#include <cstdio>
-#include <cstdlib>
+#include <chrono>
+#include <iomanip>
+#include <iostream>
+#include <numeric>
+#include <sstream>
+#include <thread>
 #include <vector>
-#include <cstring>
-#include <limits>
-#include <unistd.h>
-#include "timer.h"
-#include "my_types.h"
-//#include "bert_layer_matmul_postop.h"
+
 #include "bert_layer_quant_int8.h"
+#include "my_types.h"
 
 static const int LAYERS = 12;
 static const int warmupTimes = 10;
@@ -132,8 +132,8 @@ void benchmarkMB1(int tokenSize, LayerWeights *weights, hpj::Matrix<float> &inpu
       {-18.6183719635009765625, 11.54715251922607421875, -2.11896610260009765625, 3.066336154937744140625, -41.8497314453125, 19.4496479034423828125, -0.16698478162288665771484375, 141.4157867431640625},
       {-23.8061676025390625, 11.55181217193603515625, -2.552584171295166015625, 3.7034885883331298828125, -36.45532989501953125, 16.997623443603515625, -0.16963402926921844482421875, 8.112117767333984375},
   };
-  
-  
+
+
   for (int i = 0; i < LAYERS; ++i)
   {
     float *minmax = frozen_minmax[i];
@@ -149,49 +149,43 @@ void benchmarkMB1(int tokenSize, LayerWeights *weights, hpj::Matrix<float> &inpu
                                minmax);
   }
 
-  std::vector<int> inputMask(ctx.maxTokenSize, 0);
-  for (int i = 0; i < ctx.maxTokenSize; ++i) inputMask[i] = 1;
+  std::vector<int> inputMask(ctx.maxTokenSize, 1);
   ctx.setInputMask(inputMask.data());
 
-  float totalTime = 0;
+  using duration = std::chrono::steady_clock::duration;
+  std::vector<duration> compute_times;
+  compute_times.reserve(benchmarkTimes);
+
   for (int i = 0; i < warmupTimes + benchmarkTimes; ++i)
   {
     hpj::Matrix<float> *m_data = &input;
 
-    struct timeval start, end;
-    gettimeofday(&start, NULL);
-
+    auto start = std::chrono::steady_clock::now();
     for (int i = 0; i < LAYERS; ++i)
     {
       hpj::Matrix<float> &out = bert_layers[i]->forward(*m_data);
       m_data = &out;
     }
+    auto end = std::chrono::steady_clock::now();
 
     if (i >= warmupTimes)
     {
-      gettimeofday(&end, NULL);
-      totalTime += (end.tv_sec - start.tv_sec) * 1000 + (end.tv_usec - start.tv_usec) / 1000.0f;
+      compute_times.push_back(end - start);
     }
   }
 
-  printf("LAST LOOP\n");
-  sleep(2);
-  {
-    hpj::Matrix<float> *m_data = &input;
+  using namespace std::chrono_literals;
+  auto total_time = std::accumulate(std::begin(compute_times), std::end(compute_times), duration{0ns});
+  auto average_time_ms = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(total_time).count() / compute_times.size();
 
-    for (int i = 0; i < LAYERS; ++i)
-    {
-      hpj::Matrix<float> &out = bert_layers[i]->forward(*m_data);
-      m_data = &out;
-    }
-  }
+  std::stringstream ss;
+  ss << std::fixed << std::setprecision(2) << "Average Time: " << average_time_ms << " ms" << std::endl;
+  std::cout << ss.str();
 
   for (int i = 0; i < LAYERS; ++i)
   {
-    delete bert_layers[i];
+      delete bert_layers[i];
   }
-
-  printf("Average Time: %.2f ms\n", totalTime / benchmarkTimes);
 }
 
 int main(int argc, char **argv)
@@ -219,12 +213,12 @@ try {
   // Fake weights
   LayerWeights weights[12];
 
-    benchmarkMB1(tokenSize, weights, input);
+  benchmarkMB1(tokenSize, weights, input);
 } catch (const std::exception& e) {
-  printf("Caught exception: %s\n", e.what());
+  std::cerr << "Caught exception: " << e.what() << std::endl;
   return 1;
 } catch (...) {
-  printf("Caught unknown exception\n");
+  std::cerr << "Caught unknown exception." << std::endl;
   return 1;
 }
 
