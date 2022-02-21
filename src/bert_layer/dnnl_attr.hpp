@@ -14,8 +14,12 @@ namespace dnnl_wrappers {
 
 class BuildAttrs {
 public:
+    static constexpr float noScale = 1.f;
+
     BuildAttrs& Scale(float scale) {
-        attr_.set_output_scales(0, {scale});
+        if (scale != noScale) {
+            attr_.set_output_scales(0, {scale});
+        }
         return *this;
     }
 

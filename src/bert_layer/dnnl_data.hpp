@@ -14,7 +14,7 @@ namespace dnnl_wrappers {
 
 class DataSource {
 public:
-    DataSource(const dnnl::memory& mem)
+    DataSource(const dnnl::memory& mem = {})
         : mem_{mem}
         , attr_{nullptr} {}
 
@@ -83,12 +83,27 @@ dnnl::memory AttachMemory(const dnnl::engine& eng, dnnl::memory::dims dims, T* d
     return dnnl::memory{md, eng, data};
 }
 
+template <class T>
+dnnl::memory CloneMemory(const dnnl::engine& eng, dnnl::stream& stm, dnnl::memory::dims dims, const T* data, bool trans = false) {
+    const auto dt = DnnlDataType<T>::value;
+    auto src = AttachMemory(eng, dims, const_cast<T*>(data), trans);
+    dnnl::memory::desc md{dims, dt, dnnl::memory::dims{}};
+    dnnl::memory dst{md, stm.get_engine()};
+    dnnl::reorder{src, dst}.execute(stm, src, dst);
+    stm.wait();
+    return dst;
+}
+
 DataSource ScaledData(const dnnl::memory& mem, float scale) {
-    return DataSource(mem, BuildAttrs().Scale(scale));
+    return scale != BuildAttrs::noScale
+        ? DataSource(mem, BuildAttrs().Scale(scale))
+        : DataSource(mem);
 }
 
 CachedDataSource ScaledCachedData(const dnnl::memory& mem, float scale) {
-    return CachedDataSource(mem, BuildAttrs().Scale(scale));
+    return  scale != BuildAttrs::noScale
+        ? CachedDataSource(mem, BuildAttrs().Scale(scale))
+        : CachedDataSource(mem);
 }
 
 class GCachedDataSource : public DataSource {
@@ -116,7 +131,9 @@ private:
 };
 
 GCachedDataSource ScaledCachedData(const std::string& key, map_mem_t& g_memory, const dnnl::memory& mem, float scale) {
-    return GCachedDataSource(key, g_memory, mem, BuildAttrs().Scale(scale));
+    return scale != BuildAttrs::noScale
+        ? GCachedDataSource(key, g_memory, mem, BuildAttrs().Scale(scale))
+        : GCachedDataSource(key, g_memory, mem);
 }
 
 } // namespace dnnl_wrappers
