@@ -8,7 +8,9 @@
 #include "my_types.h"
 #include "dnnl_common.h"
 #include "bert_context.h"
-#include "dnnl_batchmatmul.h"
+#include "dnnl_attr.hpp"
+#include "dnnl_data.hpp"
+#include "dnnl_ops.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -24,12 +26,32 @@
 #define QUANT_INT8
 //#define dynamic_quant
 
+#define BFLOAT16_ATTENTION 0
+
 namespace dnnl_wrappers {
 // TODO(rfsaliev) Remove the temporary helper to attach dnnl::memory to hpj::Matrix<> data
 template <class T>
 dnnl::memory AttachMemory(const dnnl::engine& eng, hpj::Matrix<T>& data, bool trans = false) {
     dnnl::memory::dims dims{data.Rows(), data.Cols()};
     return dnnl_wrappers::AttachMemory(eng, dims, data.Data(), trans);
+}
+
+/// Attach dnnl::memory to memory buffer using specified layout
+template <class T>
+dnnl::memory AttachMemory(const dnnl::engine& eng, T* data, dnnl::memory::desc layout) {
+    // enforce memory data type to be equal to matrix data type
+    layout.data.data_type = dnnl::memory::convert_to_c(DnnlDataType<T>::value);
+    return dnnl::memory{layout, eng, data};
+}
+
+/// Attach dnnl::memory to matrix using specified layout but keeping origin data_type
+template <class T>
+dnnl::memory AttachMemory(const dnnl::engine& eng, hpj::Matrix<T>& data, dnnl::memory::desc layout) {
+    // enforce memory data type to be equal to matrix data type
+    layout.data.data_type = dnnl::memory::convert_to_c(DnnlDataType<T>::value);
+    assert(data.Rows() * data.Cols() * sizeof(T) == layout.get_size());
+
+    return AttachMemory(eng, data.Data(), layout);
 }
 } // namespace dnnl_wrappers
 
@@ -42,6 +64,11 @@ class BertLayer
 #endif
 
 public:
+    // All BERT models use same head size - 64
+    // * Base: hiddenSize = 768, heads = 12
+    // * Large: hiddenSize = 1024, heads = 16
+    static constexpr int head_size = 64;
+
     // hiddenSize 768 Hidden layer neurons, number of hidden units
     // intermediateSize 3072 feed-forward/filter size dimension 4*hiddensize 
     BertLayer(BertContext &_ctx, int maxTokenSize = 128, int hiddenSize = 768, int intermediateSize = 3072) :
@@ -107,11 +134,17 @@ public:
             valueMatMul_
         ) = BuildMatMul(m, n, k, qkv_SrcScale, _valueWeight, _valueBias);
 
+        // Batch MatMul1 with bias and scale construction
+        batchMatMul1ScaleBias_ = BuildBatchMatMul1WithScaleBias();
+
         // Softmax construction
         m = 12*maxTokenSize;
         n = maxTokenSize;
         const int axis = 1;
         softmax_ = std::make_unique<SoftMax>(MakeSoftmax<float>(eng, m, n, axis));
+
+        // Batch MatMul2 construction
+        batchMatMul2_ = BuildBatchMatMul2();
 
         // Weights for attention output
         m = maxTokenSize; // A.Rows();
@@ -205,16 +238,28 @@ public:
         auto valueMem = AttachMemory(eng, value);
         valueMatMul_->Compute(stm, qkv_SrcData, valueWeight, valueBias, valueMem);
 
-        // TODO(rfsaliev) refactor batchMatMul calls
-        batchMatMul_dnnl_1_with_scale_bias(query, key, ctx.qk_result);
+        // Batch MatMul1 with bias and scale
+        auto batchMatMul1_desc = batchMatMul1ScaleBias_->PrimDesc();
+        auto batchMatMul1_QData = DataSource(AttachMemory(eng, query, batchMatMul1_desc.src_desc()));
+        auto batchMatMul1_KData = DataSource(AttachMemory(eng, key, batchMatMul1_desc.weights_desc()));
+        auto batchMatMul1_BData = DataSource(AttachMemory(eng, ctx.magic_value.get(), batchMatMul1_desc.bias_desc()));
+        auto batchMatMul1_QKMem = AttachMemory(eng, ctx.qk_resultBuffer, batchMatMul1_desc.dst_desc());
+
+        batchMatMul1ScaleBias_->Compute(stm, batchMatMul1_QData, batchMatMul1_KData, batchMatMul1_BData, batchMatMul1_QKMem);
 
         // Softmax
         auto qk_resultMem = AttachMemory(eng, {12*maxTokenSize, maxTokenSize}, ctx.qk_result[0]);
         auto qk_resultData = DataSource(qk_resultMem);
         softmax_->Compute(stm, qk_resultData, qk_resultMem);
 
-        // TODO(rfsaliev) refactor batchMatMul calls
-        batchMatMul_dnnl_2(ctx.qk_result, value, ctx.resultBuffer1);
+        // Batch MatMul2
+        auto batchMatMul2_desc = batchMatMul2_->PrimDesc();
+        auto batchMatMul2_QKData = DataSource(AttachMemory(eng, ctx.qk_resultBuffer, batchMatMul2_desc.src_desc()));
+        auto batchMatMul2_VData  = DataSource(AttachMemory(eng, value, batchMatMul2_desc.weights_desc()));
+        auto batchMatMul2_BData  = DataSource();
+        auto batchMatMul2_DMem = AttachMemory(eng, ctx.resultBuffer1, batchMatMul2_desc.dst_desc());
+
+        batchMatMul2_->Compute(stm, batchMatMul2_QKData, batchMatMul2_VData, batchMatMul2_BData, batchMatMul2_DMem);
 
         // Attention Output
 #ifdef dynamic_quant
@@ -319,61 +364,58 @@ private:
             );
     }
 
-    void batchMatMul_dnnl_1_with_scale_bias(hpj::Matrix<float> &A, hpj::Matrix<float> &B, std::vector<float*> &c_array){
-        bool wTrans = true;
-        int m = A.Rows();  // maxTokenSize = 128
-        int k = 64;        // 12 * 64 = 768
-        int n = B.Rows(); // B needs to transpose
+#if BFLOAT16_ATTENTION
+    using batch_input_t = bfloat16;
+#else
+    using batch_input_t = float;
+#endif
 
-        int batch = 12;
-        int lda = hiddenSize;
-        int ldb = hiddenSize;
-        int ldc = maxTokenSize;
+    std::unique_ptr<dnnl_wrappers::MatMul> BuildBatchMatMul1WithScaleBias() {
+        const int m = maxTokenSize;
+        const int k = head_size;
+        const int n = maxTokenSize; // B needs to transpose
+        const int heads = hiddenSize / head_size;
 
-        int batch_stride_a = k;
-        int batch_stride_b = k;
-        int batch_stride_c = maxTokenSize*maxTokenSize;
-        int batch_stride_bias = 0;
+        const auto s_dt = DnnlDataType<batch_input_t>::value;
+        const auto w_dt = DnnlDataType<batch_input_t>::value;
+        const auto b_dt = DnnlDataType<float>::value;
+        const auto d_dt = DnnlDataType<float>::value;
 
-        int batch_src = batch;
-        int batch_weights = batch;
-        int batch_dst = batch;
-        int batch_bias = 1;
+        // B needs to transpose
+        // dnnl::memory::format_tag::cab - is not defined
+        const dnnl::memory::dims dnnl_strides__format_tag__cab{k, 1, heads * k};
 
-        float *pA = A.Data();
-        float *pB = B.Data();
-        float *pC = c_array[0];
-        
-        float *pBias = ctx.magic_value.get();
+        const dnnl::memory::desc     src_md{{heads, m, k}, s_dt, dnnl::memory::format_tag::bac};
+        const dnnl::memory::desc weights_md{{heads, k, n}, w_dt, dnnl_strides__format_tag__cab};
+        const dnnl::memory::desc    bias_md{{    1, 1, n}, b_dt, dnnl::memory::format_tag::abc};
+        const dnnl::memory::desc     dst_md{{heads, m, n}, d_dt, dnnl::memory::format_tag::abc};
 
-        float scale = 0.125f;
+        const float scale = 0.125f;
 
-        BatchMatMul_with_stride_bias(ctx.dnnl_context, pA, pB, pC, pBias, m, n, k, lda, ldb, ldc, 
-                            batch_stride_a, batch_stride_b, batch_stride_c, batch_stride_bias, 
-                            batch_src, batch_weights, batch_dst, batch_bias, scale, wTrans);
+        return std::make_unique<dnnl_wrappers::MatMul>(
+                    ctx.dnnl_context.getEngine(),
+                    src_md, weights_md, bias_md, dst_md,
+                    dnnl_wrappers::BuildAttrs().Scale(scale));
     }
 
-    void batchMatMul_dnnl_2(std::vector<float*> &a_array, hpj::Matrix<float> &B, hpj::Matrix<float> &C){
-        bool wTrans = false;
-        int m = maxTokenSize;
-        int k = maxTokenSize;
-        int n = 64;
+    std::unique_ptr<dnnl_wrappers::MatMul> BuildBatchMatMul2() {
+        const int m = maxTokenSize;
+        const int k = maxTokenSize;
+        const int n = head_size;
+        const int heads = hiddenSize / head_size;
 
-        float *pA = a_array[0];
-        float *pB = B.Data();
-        float *pC = C.Data();
+        const auto s_dt = DnnlDataType<batch_input_t>::value;
+        const auto w_dt = DnnlDataType<batch_input_t>::value;
+        const auto d_dt = DnnlDataType<float>::value;
 
-        int lda = maxTokenSize;
-        int ldb = hiddenSize;
-        int ldc = hiddenSize;
+        const dnnl::memory::desc     src_md{{heads, m, k}, s_dt, dnnl::memory::format_tag::abc};
+        const dnnl::memory::desc weights_md{{heads, k, n}, w_dt, dnnl::memory::format_tag::bac};
+        const dnnl::memory::desc     dst_md{{heads, m, n}, d_dt, dnnl::memory::format_tag::bac};
 
-        int batch = 12;
-        int batch_stride_a = maxTokenSize*maxTokenSize;
-        int batch_stride_b = n;
-        int batch_stride_c = n;
-
-        BatchMatMul_with_stride(ctx.dnnl_context, pA, pB, pC, m, n, k, lda, ldb, ldc, 
-                        batch_stride_a, batch_stride_b, batch_stride_c, wTrans, batch);
+        return std::make_unique<dnnl_wrappers::MatMul>(
+                        ctx.dnnl_context.getEngine(),
+                        src_md, weights_md, dnnl::memory::desc{}, dst_md,
+                        dnnl::primitive_attr{});
     }
 
 private:
@@ -387,7 +429,11 @@ private:
     dnnl_wrappers::CachedDataSource queryBias;
     std::unique_ptr<dnnl_wrappers::MatMul> queryMatMul_;
 
+    std::unique_ptr<dnnl_wrappers::MatMul> batchMatMul1ScaleBias_;
+
     std::unique_ptr<dnnl_wrappers::SoftMax> softmax_;
+
+    std::unique_ptr<dnnl_wrappers::MatMul> batchMatMul2_;
 
     dnnl_wrappers::CachedDataSource keyWeight;
     dnnl_wrappers::CachedDataSource keyBias;
