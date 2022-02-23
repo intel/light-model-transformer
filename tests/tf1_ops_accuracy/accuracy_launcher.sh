@@ -13,7 +13,14 @@ path_to_modified_model=$base_dir/modified_bert_model
 data_dir=$base_dir/download_glue/glue_data/MRPC
 vocab_path=$path_to_model/vocab.txt
 
+if [ -n "$2" ]; then    
+    printf "${2}\t" >> $out_file
+fi
 $Python3_EXECUTABLE accuracy.py $path_to_model $data_dir $path_to_bertop --vocab_file=$vocab_path --out_file=$out_file
+
+if [ -n "$2" ]; then    
+    printf "${2}\t" >> $out_file
+fi
 $Python3_EXECUTABLE accuracy.py $path_to_modified_model $data_dir $path_to_bertop --vocab_file=$vocab_path --out_file=$out_file
 
 popd
