@@ -36,22 +36,11 @@ dnnl::memory AttachMemory(const dnnl::engine& eng, hpj::Matrix<T>& data, bool tr
     return dnnl_wrappers::AttachMemory(eng, dims, data.Data(), trans);
 }
 
-/// Attach dnnl::memory to memory buffer using specified layout
-template <class T>
-dnnl::memory AttachMemory(const dnnl::engine& eng, T* data, dnnl::memory::desc layout) {
-    // enforce memory data type to be equal to matrix data type
-    layout.data.data_type = dnnl::memory::convert_to_c(DnnlDataType<T>::value);
-    return dnnl::memory{layout, eng, data};
-}
-
-/// Attach dnnl::memory to matrix using specified layout but keeping origin data_type
-template <class T>
-dnnl::memory AttachMemory(const dnnl::engine& eng, hpj::Matrix<T>& data, dnnl::memory::desc layout) {
-    // enforce memory data type to be equal to matrix data type
-    layout.data.data_type = dnnl::memory::convert_to_c(DnnlDataType<T>::value);
-    assert(data.Rows() * data.Cols() * sizeof(T) == layout.get_size());
-
-    return AttachMemory(eng, data.Data(), layout);
+/// Reinterpret memory keeping origin data_type
+dnnl::memory reLayoutMemory(const dnnl::memory& mem, dnnl::memory::desc layout) {
+    layout.data.data_type = mem.get_desc().data.data_type;
+    assert(layout.get_size() == mem.get_desc().get_size());
+    return dnnl::memory{layout, mem.get_engine(), mem.get_data_handle()};
 }
 } // namespace dnnl_wrappers
 
@@ -64,10 +53,7 @@ class BertLayer
 #endif
 
 public:
-    // All BERT models use same head size - 64
-    // * Base: hiddenSize = 768, heads = 12
-    // * Large: hiddenSize = 1024, heads = 16
-    static constexpr int head_size = 64;
+    static constexpr int head_size = BertContext::head_size;
 
     // hiddenSize 768 Hidden layer neurons, number of hidden units
     // intermediateSize 3072 feed-forward/filter size dimension 4*hiddensize 
@@ -138,10 +124,9 @@ public:
         batchMatMul1ScaleBias_ = BuildBatchMatMul1WithScaleBias();
 
         // Softmax construction
-        m = 12*maxTokenSize;
-        n = maxTokenSize;
-        const int axis = 1;
-        softmax_ = std::make_unique<SoftMax>(MakeSoftmax<float>(eng, m, n, axis));
+        const auto qk_result_md = ctx.qk_resultBuffer.get_desc();
+        const int axis = qk_result_md.dims().size() - 1;
+        softmax_ = std::make_unique<SoftMax>(eng, qk_result_md, axis);
 
         // Batch MatMul2 construction
         batchMatMul2_ = BuildBatchMatMul2();
@@ -215,11 +200,6 @@ public:
 
         auto inputBufferMem = AttachMemory(eng, inputBuffer);
 
-        // TODO(rfsaliev) separate buffers for query, key and value
-        hpj::Matrix<float> query(ctx.qkvMatMul, 0, ctx.maxTokenSize, 0, hiddenSize);
-        hpj::Matrix<float> key(ctx.qkvMatMul, ctx.maxTokenSize, ctx.maxTokenSize, 0, hiddenSize);
-        hpj::Matrix<float> value(ctx.qkvMatMul, 2*ctx.maxTokenSize, ctx.maxTokenSize, 0, hiddenSize);
-
 #ifdef dynamic_quant
         qkv_SrcScale = computeQuantizationScale<input_t>(inputBuffer);
 #endif
@@ -227,37 +207,33 @@ public:
         auto qkv_SrcData = ScaledData(inputBufferMem, qkv_SrcScale);
 
         // Query
-        auto queryMem = AttachMemory(eng, query);
-        queryMatMul_->Compute(stm, qkv_SrcData, queryWeight, queryBias, queryMem);
+        queryMatMul_->Compute(stm, qkv_SrcData, queryWeight, queryBias, ctx.query);
 
         // Key
-        auto keyMem = AttachMemory(eng, key);
-        keyMatMul_->Compute(stm, qkv_SrcData, keyWeight, keyBias, keyMem);
+        keyMatMul_->Compute(stm, qkv_SrcData, keyWeight, keyBias, ctx.key);
 
         // Value
-        auto valueMem = AttachMemory(eng, value);
-        valueMatMul_->Compute(stm, qkv_SrcData, valueWeight, valueBias, valueMem);
+        valueMatMul_->Compute(stm, qkv_SrcData, valueWeight, valueBias, ctx.value);
+
 
         // Batch MatMul1 with bias and scale
         auto batchMatMul1_desc = batchMatMul1ScaleBias_->PrimDesc();
-        auto batchMatMul1_QData = DataSource(AttachMemory(eng, query, batchMatMul1_desc.src_desc()));
-        auto batchMatMul1_KData = DataSource(AttachMemory(eng, key, batchMatMul1_desc.weights_desc()));
-        auto batchMatMul1_BData = DataSource(AttachMemory(eng, ctx.magic_value.get(), batchMatMul1_desc.bias_desc()));
-        auto batchMatMul1_QKMem = AttachMemory(eng, ctx.qk_resultBuffer, batchMatMul1_desc.dst_desc());
+        auto batchMatMul1_QData = DataSource(reLayoutMemory(ctx.query, batchMatMul1_desc.src_desc()));
+        auto batchMatMul1_KData = DataSource(reLayoutMemory(ctx.key, batchMatMul1_desc.weights_desc()));
+        auto batchMatMul1_BData = DataSource(ctx.magic_value);
 
-        batchMatMul1ScaleBias_->Compute(stm, batchMatMul1_QData, batchMatMul1_KData, batchMatMul1_BData, batchMatMul1_QKMem);
+        batchMatMul1ScaleBias_->Compute(stm, batchMatMul1_QData, batchMatMul1_KData, batchMatMul1_BData, ctx.qk_resultBuffer);
 
         // Softmax
-        auto qk_resultMem = AttachMemory(eng, {12*maxTokenSize, maxTokenSize}, ctx.qk_result[0]);
-        auto qk_resultData = DataSource(qk_resultMem);
-        softmax_->Compute(stm, qk_resultData, qk_resultMem);
+        auto qk_resultData = DataSource(ctx.qk_resultBuffer);
+        softmax_->Compute(stm, qk_resultData, ctx.qk_resultBuffer);
 
         // Batch MatMul2
         auto batchMatMul2_desc = batchMatMul2_->PrimDesc();
-        auto batchMatMul2_QKData = DataSource(AttachMemory(eng, ctx.qk_resultBuffer, batchMatMul2_desc.src_desc()));
-        auto batchMatMul2_VData  = DataSource(AttachMemory(eng, value, batchMatMul2_desc.weights_desc()));
+        auto batchMatMul2_QKData = DataSource(ctx.qk_resultBuffer);
+        auto batchMatMul2_VData  = DataSource(reLayoutMemory(ctx.value, batchMatMul2_desc.weights_desc()));
         auto batchMatMul2_BData  = DataSource();
-        auto batchMatMul2_DMem = AttachMemory(eng, ctx.resultBuffer1, batchMatMul2_desc.dst_desc());
+        auto batchMatMul2_DMem = reLayoutMemory(ctx.resultBuffer1, batchMatMul2_desc.dst_desc());
 
         batchMatMul2_->Compute(stm, batchMatMul2_QKData, batchMatMul2_VData, batchMatMul2_BData, batchMatMul2_DMem);
 
@@ -265,7 +241,7 @@ public:
 #ifdef dynamic_quant
         attentionout_SrcScale = computeQuantizationScale<input_t>(ctx.resultBuffer1);
 #endif
-        auto attentionOut_SrcData = ScaledData(AttachMemory(eng, ctx.resultBuffer1), attentionout_SrcScale);
+        auto attentionOut_SrcData = ScaledData(ctx.resultBuffer1, attentionout_SrcScale);
         attentionMatMul_->Compute(stm, attentionOut_SrcData, attentionOutputWeight, attentionOutputBias, inputBufferMem);
 
         // BatchNorm 1
@@ -277,8 +253,7 @@ public:
         intermediate_SrcScale = computeQuantizationScale<input_t>(inputBuffer);
 #endif
         auto intermediate_SrcData = ScaledData(inputBufferMem, intermediate_SrcScale);
-        auto intermediateBufferMem = AttachMemory(eng, ctx.intermediateBuffer);
-        intermediateMatMul_->Compute(stm, intermediate_SrcData, intermediateWeight, intermediateBias, intermediateBufferMem);
+        intermediateMatMul_->Compute(stm, intermediate_SrcData, intermediateWeight, intermediateBias, ctx.intermediateBuffer);
 
         // Output MatMul with Sum
 #ifdef dynamic_quant
@@ -286,7 +261,7 @@ public:
         //                improve max_matrix() performance if dyn quant is unavoidable
         out_SrcScale = computeQuantizationScale<input_t>(ctx.intermediateBuffer);
 #endif
-        auto output_SrcData = ScaledData(intermediateBufferMem, out_SrcScale);
+        auto output_SrcData = ScaledData(ctx.intermediateBuffer, out_SrcScale);
 
         outputMatMul_->Compute(stm, output_SrcData, outputWeight, outputBias, inputBufferMem);
 
@@ -330,6 +305,16 @@ private:
     typename std::enable_if_t<is_quantizable<T>::value, float>
     static constexpr computeQuantizationScale(float min, float max) {
         return std::numeric_limits<T>::max() / std::abs(max - min);
+    }
+
+    // For dynamic quantization case
+    // TODO(rfsaliev) use dnnl::reduction to compute max value
+    template <class T>
+    typename std::enable_if_t<is_quantizable<T>::value, float>
+    computeQuantizationScale(const dnnl::memory& mem) {
+        assert(mem.get_desc().data_type() == dnnl::memory::data_type::f32);
+        ctx.dnnl_context.eng_stream().wait();
+        return computeQuantizationScale<T>(MemoryAccessor<float>(mem).Data(), mem.get_desc().get_size() / sizeof(float));
     }
 
     // Fake method just to test above templates

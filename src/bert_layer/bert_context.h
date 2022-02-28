@@ -5,7 +5,7 @@
 #ifndef BERT_CONTEXT_H_
 #define BERT_CONTEXT_H_
 
-#include "my_types.h"
+#include "dnnl_common.h"
 
 #include <cstdlib>
 #include <omp.h>
@@ -13,45 +13,41 @@
 #include <memory>
 
 
-#define SEPARATE_QKV
-
 class BertContext {
+    using dt = dnnl::memory::data_type;
+    using dims = dnnl::memory::dims;
 public:
-    BertContext(int maxTokenSize = 128, int hiddenSize = 768, int intermediateSize = 3072) {
-        this->maxTokenSize = maxTokenSize;
-        this->hiddenSize = hiddenSize;
-        this->intermediateSize = intermediateSize;
+    // All BERT models use same head size - 64
+    // * Base: hiddenSize = 768, heads = 12
+    // * Large: hiddenSize = 1024, heads = 16
+    // TODO(rfsaliev) review correlation with the 'NumAttentionHeads' attribute
+    static constexpr int head_size = 64;
 
-#ifdef SEPARATE_QKV
-        qkvMatMul.Resize(maxTokenSize*3, hiddenSize);
-#else
-        qkvMatMul.Resize(maxTokenSize, hiddenSize*3);
-#endif
-        resultBuffer1.Resize(maxTokenSize, hiddenSize);
-        resultBuffer2.Resize(maxTokenSize, hiddenSize);
-        intermediateBuffer.Resize(maxTokenSize, intermediateSize);
-
-        qk_resultBuffer.Resize(12*maxTokenSize, maxTokenSize);
-
-        qk_result.reserve(12);
-
-        for (int i = 0; i < 12; ++i) {
-            qk_result.emplace_back(qk_resultBuffer.Data() + i * maxTokenSize * maxTokenSize);
-        }
-
-        magic_value.reset((float *)aligned_alloc(64, sizeof(float) * maxTokenSize));
-    }
-
-    virtual ~BertContext() {
+    BertContext(int maxTokenSize = 128, int hiddenSize = 768, int intermediateSize = 3072)
+        : maxTokenSize{maxTokenSize}
+        , hiddenSize{hiddenSize}
+        , intermediateSize{intermediateSize}
+        , query{dnnl::memory::desc{{maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
+        , key  {dnnl::memory::desc{{maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
+        , value{dnnl::memory::desc{{maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
+        , resultBuffer1{dnnl::memory::desc{{maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
+        , intermediateBuffer{dnnl::memory::desc{{maxTokenSize, intermediateSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
+        , qk_resultBuffer{dnnl::memory::desc{{hiddenSize / head_size, maxTokenSize, maxTokenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
+        , magic_value{dnnl::memory::desc{{1,1,maxTokenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
+    {
+        assert(hiddenSize % head_size == 0);
     }
 
     // Set input mask
     template <typename T>
     void setInputMask(const T *input_mask)
     {
+        // TODO(rfsaliev) utilize dnnl::eltwise(linear) instead
+        MemoryAccessor<float> magic_value_acc(magic_value);
+        assert(magic_value.get_desc().get_size() >= maxTokenSize * sizeof(float));
         for (int i = 0; i < maxTokenSize; ++i)
         {
-            this->magic_value.get()[i] = -10000.0f * (1 - input_mask[i]);
+            magic_value_acc.Data()[i] = -10000.0f * (1 - input_mask[i]);
         }
     }
 
@@ -61,18 +57,18 @@ public:
     DnnlCommon dnnl_context;
 
     // Store the result of input*qkvWeight
-    hpj::Matrix<float> qkvMatMul;
+    dnnl::memory query;
+    dnnl::memory key;
+    dnnl::memory value;
     // Buffer like the dimesion of 128x768
-    hpj::Matrix<float> resultBuffer1, resultBuffer2;
+    dnnl::memory resultBuffer1;
     // Buffer to store the result of intermediate
-    hpj::Matrix<float> intermediateBuffer;
+    dnnl::memory intermediateBuffer;
     // Store the BatchMatMul result of query and key
-    std::vector<float*> qk_result{};
-
-    hpj::Matrix<float> qk_resultBuffer;
+    dnnl::memory qk_resultBuffer;
 
     // Magic value: 0 or -10000
-    std::unique_ptr<float, decltype(&free)> magic_value = std::unique_ptr<float, decltype(&free)>(0, &free);
+    dnnl::memory magic_value;
 };
 
 #endif

@@ -33,6 +33,30 @@ template <> struct DnnlDataType<uint8_t> {
     static constexpr dnnl::memory::data_type value = dnnl::memory::data_type::u8;
 };
 
+// TODO(rfsaliev) Replace MemoryAccessor with dnnl::reorder functionality to read-write dnnl::memory
+template <class T>
+class MemoryAccessor {
+public:
+    MemoryAccessor(dnnl::memory mem)
+        : mem_{std::move(mem)}
+        , ptr_{mem_ ? mem_.map_data<T>() : nullptr}{}
+
+    ~MemoryAccessor() {
+        if (ptr_ && mem_) {
+            mem_.unmap_data(ptr_);
+        }
+    }
+
+    T* Data() { return ptr_; }
+private:
+    dnnl::memory mem_;
+    T* ptr_ = nullptr;
+
+    // Non copyable
+    MemoryAccessor(const MemoryAccessor&) = delete;
+    MemoryAccessor& operator=(const MemoryAccessor&) = delete;
+};
+
 typedef std::unordered_map<std::string, dnnl::memory> map_mem_t;
 typedef std::unordered_map<std::string, dnnl::inner_product_forward::primitive_desc> map_ip_primd_t;
 typedef std::unordered_map<std::string, dnnl::matmul::primitive_desc> map_mm_primd_t;
