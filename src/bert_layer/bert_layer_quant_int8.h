@@ -23,7 +23,6 @@
 #include <vector>
 
 
-#define QUANT_INT8
 //#define dynamic_quant
 
 #define BFLOAT16_ATTENTION 0
@@ -46,12 +45,7 @@ dnnl::memory reLayoutMemory(const dnnl::memory& mem, dnnl::memory::desc layout) 
 
 class BertLayer
 {
-#ifdef QUANT_INT8
-    using input_t = int8_t;
-#else
-    using input_t = float;
-#endif
-
+    using input_t = BertContext::input_t;
 public:
     static constexpr int head_size = BertContext::head_size;
 
@@ -163,24 +157,29 @@ public:
 
         intermediate_SrcScale = computeQuantizationScale<input_t>(minmax[4], minmax[5]);
 
+        // Apply source quantization scale for output matmul to intermediate matmul result
+        const auto intermediate_PostScale = computeQuantizationScale<input_t>(minmax[6], minmax[7]);
+
         std::tie(
             intermediateWeight,
             intermediateBias,
             intermediateMatMul_
-        ) = BuildMatMul(m, n, k, intermediate_SrcScale, _intermediateWeight, _intermediateBias, BuildAttrs().Eltwise(dnnl::algorithm::eltwise_gelu_erf));
+        ) = BuildMatMul<input_t, input_t, float, input_t>(m, n, k, intermediate_SrcScale, _intermediateWeight, _intermediateBias,
+                        BuildAttrs().Eltwise(dnnl::algorithm::eltwise_gelu_erf, 0.f, 0.f, intermediate_PostScale));
 
         // output dense weight and bias
         m = maxTokenSize; // A.Rows();
         n = hiddenSize; // B.Cols();
         k = intermediateSize; // A.Cols() == B.Rows();
 
-        out_SrcScale = computeQuantizationScale<input_t>(minmax[6], minmax[7]);
+        const auto out_WScale = computeQuantizationScale<input_t>(_outputWeight,  k * n);
+        const auto out_BiasScale = intermediate_PostScale * out_WScale;
 
         std::tie(
             outputWeight,
             outputBias,
             outputMatMul_
-        ) = BuildMatMul(m, n, k, out_SrcScale, _outputWeight, _outputBias, BuildAttrs().Sum());
+        ) = BuildMatMul(m, n, k, out_WScale, out_BiasScale, _outputWeight, _outputBias, BuildAttrs().Sum());
 
         // Output batchnorm
         const auto gamma2_mem = CloneMemory(eng, stm, {1, hiddenSize}, _gamma2);
@@ -256,12 +255,7 @@ public:
         intermediateMatMul_->Compute(stm, intermediate_SrcData, intermediateWeight, intermediateBias, ctx.intermediateBuffer);
 
         // Output MatMul with Sum
-#ifdef dynamic_quant
-        // TODO(rfsaliev) analyze accuracy effect of the dynamic quantization here
-        //                improve max_matrix() performance if dyn quant is unavoidable
-        out_SrcScale = computeQuantizationScale<input_t>(ctx.intermediateBuffer);
-#endif
-        auto output_SrcData = ScaledData(ctx.intermediateBuffer, out_SrcScale);
+        auto output_SrcData = DataSource(ctx.intermediateBuffer);
 
         outputMatMul_->Compute(stm, output_SrcData, outputWeight, outputBias, inputBufferMem);
 
@@ -326,17 +320,19 @@ private:
         static_assert(computeQuantizationScale<uint16_t>(0.f, 254.f) == BuildAttrs::noScale);
     }
 
+    template <class Src_T = input_t, class Weight_T = Src_T, class Bias_T = float, class Dst_T = float>
     std::tuple<
         dnnl_wrappers::CachedDataSource,        // weight_data
         dnnl_wrappers::CachedDataSource,        // bias_data
         std::unique_ptr<dnnl_wrappers::MatMul>  // MatMul
-    > BuildMatMul(int m, int n, int k, float src_scale, const float* weight, const float* bias, dnnl_wrappers::BuildAttrs attrs = {}) {
+    > BuildMatMul(int m, int n, int k,
+                  float weight_scale, float bias_scale,
+                  const float* weight, const float* bias,
+                  dnnl_wrappers::BuildAttrs attrs = {}) {
             using namespace dnnl_wrappers;
             auto& eng = ctx.dnnl_context.getEngine();
             auto& stm = ctx.dnnl_context.getEngineStream();
 
-            const auto weight_scale = computeQuantizationScale<input_t>(weight, k * n);
-            const auto bias_scale = src_scale * weight_scale;
             const auto dst_scale = 1.f / bias_scale;
 
             const auto weight_mem = CloneMemory(eng, stm, {k, n}, weight);
@@ -345,8 +341,19 @@ private:
             return std::make_tuple(
                     ScaledCachedData(weight_mem, weight_scale),
                     ScaledCachedData(bias_mem, bias_scale),
-                    std::make_unique<MatMul>(MakeMatMul<input_t, input_t, float, float>(eng, m, n, k, attrs.Scale(dst_scale)))
+                    std::make_unique<MatMul>(MakeMatMul<Src_T, Weight_T, Bias_T, Dst_T>(eng, m, n, k, attrs.Scale(dst_scale)))
             );
+    }
+
+    template <class Src_T = input_t, class Weight_T = Src_T, class Bias_T = float, class Dst_T = float>
+    std::tuple<
+        dnnl_wrappers::CachedDataSource,        // weight_data
+        dnnl_wrappers::CachedDataSource,        // bias_data
+        std::unique_ptr<dnnl_wrappers::MatMul>  // MatMul
+    > BuildMatMul(int m, int n, int k, float src_scale, const float* weight, const float* bias, dnnl_wrappers::BuildAttrs attrs = {}) {
+            const auto weight_scale = computeQuantizationScale<Weight_T>(weight, k * n);
+            const auto bias_scale = src_scale * weight_scale;
+            return BuildMatMul<Src_T, Weight_T, Bias_T, Dst_T>(m, n, k, weight_scale, bias_scale, weight, bias, attrs);
     }
 
 #if BFLOAT16_ATTENTION
@@ -450,7 +457,6 @@ private:
     float qkv_SrcScale;
     float attentionout_SrcScale;
     float intermediate_SrcScale;
-    float out_SrcScale;
 };
 
 #endif

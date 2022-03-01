@@ -12,11 +12,18 @@
 #include <vector>
 #include <memory>
 
+#define QUANT_INT8
 
 class BertContext {
     using dt = dnnl::memory::data_type;
     using dims = dnnl::memory::dims;
 public:
+#ifdef QUANT_INT8
+    using input_t = int8_t;
+#else
+    using input_t = float;
+#endif
+
     // All BERT models use same head size - 64
     // * Base: hiddenSize = 768, heads = 12
     // * Large: hiddenSize = 1024, heads = 16
@@ -31,7 +38,7 @@ public:
         , key  {dnnl::memory::desc{{maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
         , value{dnnl::memory::desc{{maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
         , resultBuffer1{dnnl::memory::desc{{maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
-        , intermediateBuffer{dnnl::memory::desc{{maxTokenSize, intermediateSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
+        , intermediateBuffer{dnnl::memory::desc{{maxTokenSize, intermediateSize}, DnnlDataType<input_t>::value, dims{}}, dnnl_context.getEngine()}
         , qk_resultBuffer{dnnl::memory::desc{{hiddenSize / head_size, maxTokenSize, maxTokenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
         , magic_value{dnnl::memory::desc{{1,1,maxTokenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
     {
