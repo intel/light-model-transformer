@@ -105,24 +105,17 @@ public:
                                     &output_tensor));
         float *output = (float *)output_tensor->tensor_data().data();
 
-        // Wrap input into matrix
-        hpj::Matrix<float> input_buf(embeded, total_tokens, hiddenSize, hiddenSize);
-        hpj::Matrix<float> *pinput = &input_buf;
 
         ctx.setInputMask(masks);
+        dnnl::memory::dims dims{total_tokens, hiddenSize};
+        auto pinput = dnnl_wrappers::AttachMemory(ctx.dnnl_context.getEngine(), dims, embeded, false);
         for (int i = 0; i < this->layers; ++i)
         {
-            hpj::Matrix<float> &out = this->bert_layers[i]->forward(*pinput);
-            pinput = &out;
+            this->bert_layers[i]->forward(pinput);
         }
 
         // Copy data to output
-#pragma omp parallel for
-        for (int i = 0; i < total_tokens; ++i)
-        {
-            memcpy(output + i * hiddenSize, pinput->Row(i), sizeof(float) * hiddenSize);
-        }
-
+        memcpy(output, embeded, sizeof(float) * hiddenSize * total_tokens);
     }
 
 private:

@@ -11,6 +11,7 @@
 #include <omp.h>
 #include <vector>
 #include <memory>
+#include <cassert>
 
 #define QUANT_INT8
 

@@ -5,7 +5,6 @@
 #ifndef BERT_LAYER_H_
 #define BERT_LAYER_H_
 
-#include "my_types.h"
 #include "dnnl_common.h"
 #include "bert_context.h"
 #include "dnnl_attr.hpp"
@@ -28,13 +27,6 @@
 #define BFLOAT16_ATTENTION 0
 
 namespace dnnl_wrappers {
-// TODO(rfsaliev) Remove the temporary helper to attach dnnl::memory to hpj::Matrix<> data
-template <class T>
-dnnl::memory AttachMemory(const dnnl::engine& eng, hpj::Matrix<T>& data, bool trans = false) {
-    dnnl::memory::dims dims{data.Rows(), data.Cols()};
-    return dnnl_wrappers::AttachMemory(eng, dims, data.Data(), trans);
-}
-
 /// Reinterpret memory keeping origin data_type
 dnnl::memory reLayoutMemory(const dnnl::memory& mem, dnnl::memory::desc layout) {
     layout.data.data_type = mem.get_desc().data.data_type;
@@ -59,20 +51,6 @@ public:
     }
 
     ~BertLayer() {}
-
-    float max_matrix(hpj::Matrix<float> &A) {
-        float max = -9.0e9;
-
-        for (int i = 0; i < A.Rows(); ++i) {
-            float *presult = A.Row(i);
-            for (int j = 0; j < A.Cols(); ++j) {
-                if(fabs(presult[j]) > max){
-                    max = fabs(presult[j]);
-                }
-            }
-        }
-        return max;
-    }
 
     // FIXME(rfsaliev) rename `minmax` argument to avoid naming collision with `std::minmax`
     void setWeights(const float *_queryWeight, const float *_queryBias,
@@ -191,13 +169,11 @@ public:
     // Do the forward computing for the whole BERT layer
     // input: maxTokenSize x hidden_size
     // actualTokens: #tokens = maxTokenSize - padded_tokens
-    hpj::Matrix<float> &forward(hpj::Matrix<float> &inputBuffer) {
+    void forward(dnnl::memory& inputBufferMem) {
 
         using namespace dnnl_wrappers;
         auto& eng = ctx.dnnl_context.getEngine();
         auto& stm = ctx.dnnl_context.getEngineStream();
-
-        auto inputBufferMem = AttachMemory(eng, inputBuffer);
 
 #ifdef dynamic_quant
         qkv_SrcScale = computeQuantizationScale<input_t>(inputBuffer);
@@ -261,8 +237,6 @@ public:
 
         // Output batchnorm
         batchNorm_->Compute(stm, inputBufferData, gamma2, beta2, inputBufferMem);
-
-        return inputBuffer;
     }
 
 private:
@@ -280,12 +254,6 @@ private:
     typename std::enable_if_t<!is_quantizable<T>::value, float>
     static constexpr computeQuantizationScale(...) {
         return dnnl_wrappers::BuildAttrs::noScale;
-    }
-
-    template <class T>
-    typename std::enable_if_t<is_quantizable<T>::value, float>
-    computeQuantizationScale(hpj::Matrix<float>& A) {
-        return std::numeric_limits<T>::max() / max_matrix(A);
     }
 
     template <class T>

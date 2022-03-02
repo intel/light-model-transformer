@@ -9,9 +9,9 @@
 #include <sstream>
 #include <thread>
 #include <vector>
+#include <random>
 
 #include "bert_layer_quant_int8.h"
-#include "my_types.h"
 
 static const int LAYERS = 12;
 static const int warmupTimes = 10;
@@ -114,7 +114,7 @@ struct LayerWeights
 };
 
 // MiniBatch = 1
-void benchmarkMB1(int tokenSize, LayerWeights *weights, hpj::Matrix<float> &input)
+void benchmarkMB1(int tokenSize, LayerWeights *weights, float *input)
 {
   BertContext ctx;
   BertLayer *bert_layers[LAYERS];
@@ -158,13 +158,13 @@ void benchmarkMB1(int tokenSize, LayerWeights *weights, hpj::Matrix<float> &inpu
 
   for (int i = 0; i < warmupTimes + benchmarkTimes; ++i)
   {
-    hpj::Matrix<float> *m_data = &input;
+    dnnl::memory::dims dims{128, 768};
+    auto buffer = dnnl_wrappers::AttachMemory(ctx.dnnl_context.getEngine(), dims, input, false);
 
     auto start = std::chrono::steady_clock::now();
     for (int i = 0; i < LAYERS; ++i)
     {
-      hpj::Matrix<float> &out = bert_layers[i]->forward(*m_data);
-      m_data = &out;
+      bert_layers[i]->forward(buffer);
     }
     auto end = std::chrono::steady_clock::now();
 
@@ -200,20 +200,15 @@ try {
   }
 
   // Fake input
-  hpj::Matrix<float> input;
-  input.Resize(batchSize * tokenSize, hiddenSize);
-  for (int i = 0; i < input.Rows(); ++i)
-  {
-    for (int j = 0; j < input.Cols(); ++j)
-    {
-      input(i, j) = 1.0f * rand() / RAND_MAX - 0.5f;
-    }
-  }
+  std::vector<float> input(batchSize * tokenSize * hiddenSize);
+  std::minstd_rand gen; //faster than MT
+  std::uniform_real_distribution<float> dist(-0.5f, 0.5f);
+  std::generate(input.begin(), input.end(), [&](){ return  dist(gen); });
 
   // Fake weights
   LayerWeights weights[12];
 
-  benchmarkMB1(tokenSize, weights, input);
+  benchmarkMB1(tokenSize, weights, input.data());
 } catch (const std::exception& e) {
   std::cerr << "Caught exception: " << e.what() << std::endl;
   return 1;
