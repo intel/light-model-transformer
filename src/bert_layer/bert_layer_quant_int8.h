@@ -176,7 +176,7 @@ public:
         auto& stm = ctx.dnnl_context.getEngineStream();
 
 #ifdef dynamic_quant
-        qkv_SrcScale = computeQuantizationScale<input_t>(inputBuffer);
+        qkv_SrcScale = computeQuantizationScale<input_t>(inputBufferMem);
 #endif
 
         auto qkv_SrcData = ScaledData(inputBufferMem, qkv_SrcScale);
@@ -225,7 +225,7 @@ public:
 
         // Intermediate with Erf
 #ifdef dynamic_quant
-        intermediate_SrcScale = computeQuantizationScale<input_t>(inputBuffer);
+        intermediate_SrcScale = computeQuantizationScale<input_t>(inputBufferMem);
 #endif
         auto intermediate_SrcData = ScaledData(inputBufferMem, intermediate_SrcScale);
         intermediateMatMul_->Compute(stm, intermediate_SrcData, intermediateWeight, intermediateBias, ctx.intermediateBuffer);
