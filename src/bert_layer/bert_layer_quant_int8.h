@@ -275,7 +275,7 @@ private:
     typename std::enable_if_t<is_quantizable<T>::value, float>
     computeQuantizationScale(const dnnl::memory& mem) {
         assert(mem.get_desc().data_type() == dnnl::memory::data_type::f32);
-        ctx.dnnl_context.eng_stream().wait();
+        ctx.dnnl_context.getEngineStream().wait();
         return computeQuantizationScale<T>(MemoryAccessor<float>(mem).Data(), mem.get_desc().get_size() / sizeof(float));
     }
 
