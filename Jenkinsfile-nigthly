@@ -47,6 +47,9 @@ pipeline {
                             -v ${jenkins_data}:/data'
                     }
                 }
+                environment {
+                    TFDS_DATA_DIR = '/data/tfds_data'
+                }
                 stages {
                     stage('build') {
                         steps {
