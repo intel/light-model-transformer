@@ -146,8 +146,6 @@ private:
             float *gamma2 = (float *)context->input(idx++).tensor_data().data();
             float *beta2 = (float *)context->input(idx++).tensor_data().data();
 
-            float *minmax = frozen_minmax[i];
-
             this->bert_layers[i]->setWeights(queryW, queryB,
                                              keyW, keyB,
                                              valueW, valueB,
@@ -156,7 +154,7 @@ private:
                                              intermediateW, intermediateB,
                                              outputW, outputB,
                                              gamma2, beta2,
-                                             minmax);
+                                             bert_layers_minmax[i]);
         }
     }
 
@@ -168,7 +166,7 @@ private:
     std::vector<BertLayer *> bert_layers;
 
     bool initialized;
-    float frozen_minmax [12][8] = {
+    Layer_minmax bert_layers_minmax[12] = {
         {-10.85244083404541015625, 4.14164829254150390625, -1.6212508678436279296875, 2.18305110931396484375, -64.5349578857421875, 9.17784881591796875, -0.16926576197147369384765625, 12.69039154052734375},
         {-10.01922702789306640625, 3.2598330974578857421875, -2.52011966705322265625, 3.17220592498779296875, -70.322662353515625, 4.564808368682861328125, -0.16925294697284698486328125, 10.93472957611083984375},
         {-11.37454319000244140625, 4.04611110687255859375, -2.5044767856597900390625, 3.4310567378997802734375, -56.21540069580078125, 5.208764553070068359375, -0.16948534548282623291015625, 72.20577239990234375},

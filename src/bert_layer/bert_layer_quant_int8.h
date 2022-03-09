@@ -35,6 +35,17 @@ dnnl::memory reLayoutMemory(const dnnl::memory& mem, dnnl::memory::desc layout) 
 }
 } // namespace dnnl_wrappers
 
+struct Layer_minmax {
+    struct Min_max {
+        float min;
+        float max;
+    };
+    Min_max qkv;
+    Min_max attentionout;
+    Min_max intermediate;
+    Min_max intermediate_post;
+};
+
 class BertLayer
 {
     using input_t = BertContext::input_t;
@@ -61,7 +72,7 @@ public:
                     const float *_intermediateWeight, const float *_intermediateBias,
                     const float *_outputWeight, const float *_outputBias,
                     const float *_gamma2, const float *_beta2,
-                    const float minmax[8]) {
+                    const Layer_minmax& layer_minmax) {
         using namespace dnnl_wrappers;
         auto& eng = ctx.dnnl_context.getEngine();
         auto& stm = ctx.dnnl_context.getEngineStream();
@@ -71,8 +82,7 @@ public:
         auto n = hiddenSize; // B.Cols();
         auto k = hiddenSize; // A.Cols() == B.Rows();
 
-        // TODO(rfsaliev) use more structured form than float[] for minimum and maximum values
-        qkv_SrcScale = computeQuantizationScale<input_t>(minmax[0], minmax[1]);
+        qkv_SrcScale = computeQuantizationScale<input_t>(layer_minmax.qkv.min, layer_minmax.qkv.max);
 
         std::tie(
             queryWeight,
@@ -108,7 +118,7 @@ public:
         n = hiddenSize; // B.Cols();
         k = hiddenSize; // A.Cols() == B.Rows();
 
-        attentionout_SrcScale = computeQuantizationScale<input_t>(minmax[2], minmax[3]);
+        attentionout_SrcScale = computeQuantizationScale<input_t>(layer_minmax.attentionout.min, layer_minmax.attentionout.max);
 
         std::tie(
             attentionOutputWeight,
@@ -133,10 +143,10 @@ public:
         n = intermediateSize; // B.Cols();
         k = hiddenSize; // A.Cols() == B.Rows();
 
-        intermediate_SrcScale = computeQuantizationScale<input_t>(minmax[4], minmax[5]);
+        intermediate_SrcScale = computeQuantizationScale<input_t>(layer_minmax.intermediate.min,layer_minmax.intermediate.max);
 
         // Apply source quantization scale for output matmul to intermediate matmul result
-        const auto intermediate_PostScale = computeQuantizationScale<input_t>(minmax[6], minmax[7]);
+        const auto intermediate_PostScale = computeQuantizationScale<input_t>(layer_minmax.intermediate_post.min, layer_minmax.intermediate_post.max);
 
         std::tie(
             intermediateWeight,
