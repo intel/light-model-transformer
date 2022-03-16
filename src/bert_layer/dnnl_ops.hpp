@@ -69,23 +69,6 @@ struct MatMulDims {
     dnnl::memory::dims dst_tz;
 };
 
-inline MatMul CachedMatMul(const std::string& key, DnnlCommon& dnnl_context,
-                           const dnnl::memory::desc& src_md,
-                           const dnnl::memory::desc& weights_md,
-                           const dnnl::memory::desc& bias_md,
-                           const dnnl::memory::desc& dst_md,
-                        const dnnl::primitive_attr& attr = {}) {
-    auto& g_prim = dnnl_context.get_g_prim();
-    auto it_prim_created = g_prim.find(key);
-    if (it_prim_created == g_prim.end())
-    {
-        MatMul result{dnnl_context.getEngine(), src_md, weights_md, bias_md, dst_md, attr};
-        g_prim.emplace(key, result.Prim());
-        return result;
-    }
-    return MatMul(it_prim_created->second);
-}
-
 inline MatMul MakeMatMul(const dnnl::engine& eng, int m, int n, int k, 
                         dnnl::memory::data_type src_dt, dnnl::memory::data_type weights_dt,
                         dnnl::memory::data_type bias_dt, dnnl::memory::data_type dst_dt,
@@ -106,21 +89,6 @@ inline MatMul MakeMatMul(const dnnl::engine& eng, int m, int n, int k,
     return MatMul{eng, src_md, weights_md, bias_md, dst_md, attr};
 }
 
-inline MatMul CachedMatMul(const std::string& key, DnnlCommon& dnnl_context, int m, int n, int k, 
-                        dnnl::memory::data_type src_dt, dnnl::memory::data_type weights_dt,
-                        dnnl::memory::data_type bias_dt, dnnl::memory::data_type dst_dt,
-                        const dnnl::primitive_attr& attr = {}) {
-    auto& g_prim = dnnl_context.get_g_prim();
-    auto it_prim_created = g_prim.find(key);
-    if (it_prim_created == g_prim.end())
-    {
-        auto result = MakeMatMul(dnnl_context.getEngine(), m, n, k, src_dt, weights_dt, bias_dt, dst_dt, attr);
-        g_prim.emplace(key, result.Prim());
-        return result;
-    }
-    return MatMul(it_prim_created->second);
-}
-
 template <typename T_src, typename T_wei, typename T_bias, typename T_dst>
 MatMul MakeMatMul(const dnnl::engine& eng, int m, int n, int k, const dnnl::primitive_attr& attr = {}) {
     const auto src_dt = DnnlDataType<T_src>::value;
@@ -128,15 +96,6 @@ MatMul MakeMatMul(const dnnl::engine& eng, int m, int n, int k, const dnnl::prim
     const auto bias_dt = DnnlDataType<T_bias>::value;
     const auto dst_dt = DnnlDataType<T_dst>::value;
     return MakeMatMul(eng, m, n, k, src_dt, weights_dt, bias_dt, dst_dt, attr);
-}
-
-template <typename T_src, typename T_wei, typename T_bias, typename T_dst>
-MatMul CachedMatMul(const std::string& key, DnnlCommon& dnnl_context, int m, int n, int k, const dnnl::primitive_attr& attr = {}) {
-    const auto src_dt = DnnlDataType<T_src>::value;
-    const auto weights_dt = DnnlDataType<T_wei>::value;
-    const auto bias_dt = DnnlDataType<T_bias>::value;
-    const auto dst_dt = DnnlDataType<T_dst>::value;
-    return CachedMatMul(key, dnnl_context, m, n, k, src_dt, weights_dt, bias_dt, dst_dt, attr);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -192,30 +151,10 @@ inline SoftMax MakeSoftmax(const dnnl::engine& eng, int m, int n,
     return SoftMax{eng, data_md, axis, attr};
 }
 
-inline SoftMax CachedSoftmax(const std::string& key, DnnlCommon& dnnl_context, int m, int n,
-                            dnnl::memory::data_type src_dt, int axis,
-                            const dnnl::primitive_attr& attr = {}) {
-    auto& g_prim = dnnl_context.get_g_prim();
-    auto it_prim_created = g_prim.find(key);
-    if (it_prim_created == g_prim.end())
-    {
-        auto result = MakeSoftmax(dnnl_context.getEngine(), m, n, src_dt, axis, attr);
-        g_prim.emplace(key, result.Prim());
-        return result;
-    }
-    return SoftMax{it_prim_created->second};
-}
-
 template <typename T_data>
 SoftMax MakeSoftmax(const dnnl::engine& eng, int m, int n, int axis, const dnnl::primitive_attr& attr = {}) {
     const auto data_dt = DnnlDataType<T_data>::value;
     return MakeSoftmax(eng, m, n, data_dt, axis, attr);
-}
-
-template <typename T_data>
-SoftMax CachedSoftmax(const std::string& key, DnnlCommon& dnnl_context, int m, int n, int axis, const dnnl::primitive_attr& attr = {}) {
-    const auto data_dt = DnnlDataType<T_data>::value;
-    return CachedSoftmax(key, dnnl_context, m, n, data_dt, axis, attr);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -279,35 +218,12 @@ inline LayerNorm MakeLayerNorm(const dnnl::engine& eng, int m, int n,
     return LayerNorm{eng, data_md, epsilon, flags, attr};
 }
 
-inline LayerNorm CachedLayerNorm(const std::string& key, DnnlCommon& dnnl_context, int m, int n,
-                        dnnl::memory::data_type data_dt, float epsilon,
-                        dnnl::normalization_flags flags = dnnl::normalization_flags::use_scale | dnnl::normalization_flags::use_shift,
-                        const dnnl::primitive_attr& attr = {}) {
-    auto& g_prim = dnnl_context.get_g_prim();
-    auto it_prim_created = g_prim.find(key);
-    if (it_prim_created == g_prim.end())
-    {
-        auto result = MakeLayerNorm(dnnl_context.getEngine(), m, n, data_dt, epsilon, flags, attr);
-        g_prim.emplace(key, result.Prim());
-        return result;
-    }
-    return LayerNorm(it_prim_created->second);
-}
-
 template <typename T_data>
 LayerNorm MakeLayerNorm(const dnnl::engine& eng, int m, int n, float epsilon,
                  dnnl::normalization_flags flags = dnnl::normalization_flags::use_scale | dnnl::normalization_flags::use_shift,
                  const dnnl::primitive_attr& attr = {}) {
     const auto data_dt = DnnlDataType<T_data>::value;
     return MakeLayerNorm(eng, m, n, data_dt, epsilon, flags, attr);
-}
-
-template <typename T_data>
-LayerNorm CachedLayerNorm(const std::string& key, DnnlCommon& dnnl_context, int m, int n, float epsilon,
-                 dnnl::normalization_flags flags = dnnl::normalization_flags::use_scale | dnnl::normalization_flags::use_shift,
-                 const dnnl::primitive_attr& attr = {}) {
-    const auto data_dt = DnnlDataType<T_data>::value;
-    return CachedLayerNorm(key, dnnl_context, m, n, data_dt, epsilon, flags, attr);
 }
 
 } // namespace dnnl_wrappers

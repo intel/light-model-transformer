@@ -106,36 +106,6 @@ CachedDataSource ScaledCachedData(const dnnl::memory& mem, float scale) {
         : CachedDataSource(mem);
 }
 
-class GCachedDataSource : public DataSource {
-public:
-    GCachedDataSource(const std::string& key, map_mem_t& g_memory, const dnnl::memory& mem)
-        : DataSource{mem}, key_{key}, g_memory_{g_memory} {}
-
-    GCachedDataSource(const std::string& key, map_mem_t& g_memory, const dnnl::memory& mem, const dnnl::primitive_attr& attr)
-        : DataSource{mem, attr}, key_{key}, g_memory_{g_memory} {}
-
-    dnnl::memory GetData(dnnl::stream& stm, const dnnl::memory::desc& md) override {
-        auto it_memory_created = g_memory_.find(key_);
-        if (it_memory_created != g_memory_.end()) {
-            return it_memory_created->second;
-        }
-
-        auto result = DataSource::GetData(stm, md);
-        g_memory_.emplace(key_, result);
-        return result;
-    }
-
-private:
-    std::string key_;
-    map_mem_t& g_memory_;
-};
-
-GCachedDataSource ScaledCachedData(const std::string& key, map_mem_t& g_memory, const dnnl::memory& mem, float scale) {
-    return scale != BuildAttrs::noScale
-        ? GCachedDataSource(key, g_memory, mem, BuildAttrs().Scale(scale))
-        : GCachedDataSource(key, g_memory, mem);
-}
-
 } // namespace dnnl_wrappers
 
 #endif //__DNNL_DATA__
