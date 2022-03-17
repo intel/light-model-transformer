@@ -360,6 +360,5 @@ if __name__ == "__main__":
     print('%d/%d=%f' % (correct, total, 1.0 * correct / total))
 
     if (FLAGS.out_file):
-      f = open(FLAGS.out_file, 'a')
-      f.write('%s\t%s\t%d/%d\t%f\n' % (model_path, tf.__version__, correct, total, 1.0 * correct / total))
-      f.close()
+      with open(FLAGS.out_file, 'a') as f:
+        f.write(f'{correct}/{total}\t{correct/total}\n')

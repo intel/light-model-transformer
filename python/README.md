@@ -19,13 +19,26 @@ Build requirements:
 Runtime requirements:
 - tensorflow
 
+## Protobuf compilation
+
+To compile the protobuf files:
+
+```sh
+$ cd <repo_root>/python/proto
+$ ./compile_proto.sh $tensorflow_include_dir
+```
+For TF2, `tensorflow_include_dir` will be `<...>/site-packages/tensorflow/include`. \
+TF1 does not seem to include `.proto` files with the package. In this case, Tensorflow sources can be used.
+`tensorflow_include_dir` will then be the root of the Tensorflow repo.
+
 ## Overview
 
-This module provides two command line tools to facilitate replacing BERT calculations in TensorFlow models with an
+This module provides command line tools to facilitate replacing BERT calculations in TensorFlow models with an
 optimized solution. The tools are:
 
 1. [Pattern extraction](#pattern-extraction)
 2. [Pattern replacement](#pattern-replacement)
+3. [Bert op configuration](#bert-op-configuration)
 
 ## Pattern extraction
 
@@ -134,7 +147,7 @@ $ ln -s modified_saved_model.pb saved_model.pb
 
 At this point, the user can freely switch between the original and optimized graphs by creating the appropriate symlink.
 
-## The recipe file
+### The recipe file
 
 The *recipe* proto currently consists of two fields:
 ```
@@ -159,3 +172,37 @@ python terminal.
 By design, a recipe file is created for a specific BERT model variant, and will work only for models based on that
 variant. If, by coincidence, two BERT model variants have the exact same BERT structure, a single recipe file should
 work on both of them, but it is not an intentional feature.
+
+## Bert op configuration
+
+The `configure_bert_op.py` tool can be used to set the quantization and bfloat16 attributes of all Bert operators in a
+modified model. The attributes can be set independently. The tool works both on saved and frozen model formats.
+
+### Examples
+
+To set all Bert ops in a saved model to use both quantization and bfloat16:
+```sh
+$ python -m model_modifier.configure_bert_op --quantization --bfloat16 /path/to/saved/model/folder
+```
+
+To set all Bert ops in a frozen model to **not** use quantization and **not** use bfloat16:
+```sh
+$ python -m model_modifier.configure_bert_op --no-quantization --no-bfloat16 /path/to/frozen/model/frozen_model.pb
+```
+
+Any combination of the above is also valid.
+
+If a quantization or bfloat16 flag is not specified, the corresponding attribute will be left unchanged in the model.
+
+So, if we want to enable quantization, but leave bfloat16 usage as-is in a saved model
+(no matter if it's enabled or disabled):
+```sh
+$ python -m model_modifier.configure_bert_op --no-quantization /path/to/saved/model/folder
+```
+
+If we don't want to modify the model graph in place, we can add an output flag to save the graph to a separate file:
+```sh
+$ python -m model_modifier.configure_bert_op --quantization -o /path/to/copy/of/saved/model/saved_model_copy.pb /path/to/saved/model/folder
+```
+Notice that in this case, even for a saved model, the output path is a .pb file, not a folder - the program makes
+a copy of the saved model's execution graph, but not the variables, assets etc.

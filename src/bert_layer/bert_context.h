@@ -15,15 +15,18 @@
 
 #define QUANT_INT8
 
+template <class InputT = float, class BatchInputT = float,
+    class = std::enable_if_t<
+        std::is_arithmetic<InputT>::value &&
+        std::is_arithmetic<BatchInputT>::value>
+>
 class BertContext {
+
     using dt = dnnl::memory::data_type;
     using dims = dnnl::memory::dims;
 public:
-#ifdef QUANT_INT8
-    using input_t = int8_t;
-#else
-    using input_t = float;
-#endif
+    using input_t = InputT;
+    using batch_input_t = BatchInputT;
 
     // All BERT models use same head size - 64
     // * Base: hiddenSize = 768, heads = 12

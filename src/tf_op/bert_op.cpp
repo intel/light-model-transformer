@@ -5,9 +5,16 @@
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/shape_inference.h"
 #include "tensorflow/core/framework/op_kernel.h"
+#include "tensorflow/core/framework/types.pb.h"
 
 #include "bert_layer_quant_int8.h"
+#include "bert_type_traits.h"
+#include "dnnl_common.h"
 
+#include <cstdint>
+#include <iomanip>
+#include <sstream>
+#include <type_traits>
 #include <vector>
 
 using namespace tensorflow;
@@ -18,6 +25,10 @@ REGISTER_OP("Bert")
     .Input("weights: NumWeights * float")
     .Output("encoded: float")
     .Attr("MaskT: {int32, int64, float, double}")
+    .Attr("QuantizableDataType: {float, qint8}")        // These types are arbitrary, the kernel builder macro calls
+    .Attr("NonQuantizableDataType: {float, bfloat16}")  // translate these into booleans for the BertOp.
+    // .Attr("UseQuantization: bool = false")   // The boolean attrs are more readable,
+    // .Attr("UseBFloat16: bool = false")       // but don't seem to work in TF 1.15.4
     .Attr("NumWeights: int >= 16") // num_layers = NumWeights/16
     .Attr("HiddenSize: int = 768")
     .Attr("NumAttentionHeads: int = 12")
@@ -27,13 +38,23 @@ REGISTER_OP("Bert")
 #define likely(x) __builtin_expect((x), 1)
 #define unlikely(x) __builtin_expect((x), 0)
 
-template <typename MaskT>
+
+
+template <bool UseQuantization = false, bool UseBFloat16 = false>
 class BertOp : public OpKernel
 {
+    using InputT = typename use_quantization<UseQuantization>::type;
+    using BatchInputT = typename use_bfloat16<UseBFloat16>::type;
+    using BertContextT = BertContext<InputT, BatchInputT>;
+
 public:
     explicit BertOp(OpKernelConstruction *context) : OpKernel(context)
     {
-        printf("Bert op Construction!\n");
+        {
+            std::stringstream ss;
+            ss << std::boolalpha << "BertOp<" << UseQuantization << ", " << UseBFloat16 << "> constructed.";
+            std::cout << ss.str() << std::endl;
+        }
 
         int num;
         OP_REQUIRES_OK(context, context->GetAttr("NumWeights", &num));
@@ -45,7 +66,7 @@ public:
 
         for (int i = 0; i < this->layers; ++i)
         {
-            auto t = new BertLayer(ctx);
+            auto t = new BertLayer<BertContextT>(ctx);
             this->bert_layers.push_back(t);
         }
 
@@ -85,7 +106,6 @@ public:
 
 
         float *embeded = (float *)tensor_embeded.tensor_data().data();
-        MaskT *masks = (MaskT *)tensor_masks.tensor_data().data();
 
         int total_tokens_idx = tensor_embeded.dims() - 2;
         int total_tokens = tensor_embeded.dim_size(total_tokens_idx); // total_tokens = batch_size * tokens_each_def128
@@ -106,7 +126,7 @@ public:
         float *output = (float *)output_tensor->tensor_data().data();
 
 
-        ctx.setInputMask(masks);
+        setInputMask(tensor_masks);
         dnnl::memory::dims dims{total_tokens, hiddenSize};
         auto pinput = dnnl_wrappers::AttachMemory(ctx.dnnl_context.getEngine(), dims, embeded, false);
         for (int i = 0; i < this->layers; ++i)
@@ -158,12 +178,33 @@ private:
         }
     }
 
+    void setInputMask(const Tensor& mask)
+    {
+        auto data = mask.tensor_data().data();
+        switch(mask.dtype()) {
+        case DT_FLOAT:
+            ctx.setInputMask((float*)data);
+            break;
+        case DT_DOUBLE:
+            ctx.setInputMask((double*)data);
+            break;
+        case DT_INT32:
+            ctx.setInputMask((int32_t*)data);
+            break;
+        case DT_INT64:
+            ctx.setInputMask((int64_t*)data);
+            break;
+        default:
+            throw std::runtime_error("Unsupported mask data type");
+        }
+    }
+
 private:
     int layers;
     int hiddenSize;
 
-    BertContext ctx;
-    std::vector<BertLayer *> bert_layers;
+    BertContextT ctx;
+    std::vector<BertLayer<BertContextT> *> bert_layers;
 
     bool initialized;
     Layer_minmax bert_layers_minmax[12] = {
@@ -182,7 +223,43 @@ private:
     };
 };
 
-REGISTER_KERNEL_BUILDER(Name("Bert").Device(DEVICE_CPU).TypeConstraint<int32>("MaskT"), BertOp<int32>);
-REGISTER_KERNEL_BUILDER(Name("Bert").Device(DEVICE_CPU).TypeConstraint<int64>("MaskT"), BertOp<int64>);
-REGISTER_KERNEL_BUILDER(Name("Bert").Device(DEVICE_CPU).TypeConstraint<float>("MaskT"), BertOp<float>);
-REGISTER_KERNEL_BUILDER(Name("Bert").Device(DEVICE_CPU).TypeConstraint<double>("MaskT"), BertOp<double>);
+
+// More readable if we can somehow get this to work on TF 1.15.4
+
+// #define REGISTER_BERT_OP(UseQuantization, UseBFloat16) \
+// REGISTER_KERNEL_BUILDER(Name("Bert") \
+//                             .Device(DEVICE_CPU) \
+//                             .AttrConstraint("UseQuantization", UseQuantization) \
+//                             .AttrConstraint("UseBFloat16", UseBFloat16), \
+//                         BertOp<UseQuantization, UseBFloat16>);
+    
+// REGISTER_BERT_OP(false, false);
+// REGISTER_BERT_OP(true, false);
+// REGISTER_BERT_OP(true, true);
+// REGISTER_BERT_OP(false, true);
+
+// Fallback to type constraints to work on both TF 1.15 and 2.X
+
+REGISTER_KERNEL_BUILDER(Name("Bert") \
+                            .Device(DEVICE_CPU) \
+                            .TypeConstraint("QuantizableDataType", DT_FLOAT) \
+                            .TypeConstraint("NonQuantizableDataType", DT_FLOAT), \
+                        BertOp<false, false>);
+
+REGISTER_KERNEL_BUILDER(Name("Bert") \
+                            .Device(DEVICE_CPU) \
+                            .TypeConstraint("QuantizableDataType", DT_QINT8) \
+                            .TypeConstraint("NonQuantizableDataType", DT_FLOAT), \
+                        BertOp<true, false>);
+
+REGISTER_KERNEL_BUILDER(Name("Bert") \
+                            .Device(DEVICE_CPU) \
+                            .TypeConstraint("QuantizableDataType", DT_FLOAT) \
+                            .TypeConstraint("NonQuantizableDataType", DT_BFLOAT16), \
+                        BertOp<false, true>);
+
+REGISTER_KERNEL_BUILDER(Name("Bert") \
+                            .Device(DEVICE_CPU) \
+                            .TypeConstraint("QuantizableDataType", DT_QINT8) \
+                            .TypeConstraint("NonQuantizableDataType", DT_BFLOAT16), \
+                        BertOp<true, true>);

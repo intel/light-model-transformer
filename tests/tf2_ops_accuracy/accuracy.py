@@ -78,4 +78,4 @@ if __name__ == '__main__':
     
     if args.out_file is not None:
         with open(args.out_file, 'a') as f:
-            f.write('%s\t%s\t%d/%d\t%f\n' % (args.model_dir, tf.__version__, correct, total_samples, correct / total_samples))
+            f.write(f'{correct}/{total_samples}\t{correct/total_samples}\n')

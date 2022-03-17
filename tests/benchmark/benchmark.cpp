@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
+#include <algorithm>
 #include <chrono>
 #include <iomanip>
 #include <iostream>
@@ -12,6 +13,7 @@
 #include <random>
 
 #include "bert_layer_quant_int8.h"
+#include "bert_type_traits.h"
 
 static const int LAYERS = 12;
 static const int warmupTimes = 10;
@@ -114,10 +116,20 @@ struct LayerWeights
 };
 
 // MiniBatch = 1
+// template <class InputT, class BatchInputT>
+// void benchmarkMB1(int tokenSize, LayerWeights *weights, float *input)
+// {
+//   using BertContextT = BertContext<InputT, BatchInputT>;
+
+template <bool do_quant, bool do_bf16>
 void benchmarkMB1(int tokenSize, LayerWeights *weights, float *input)
 {
-  BertContext ctx;
-  BertLayer *bert_layers[LAYERS];
+  using InputT = typename use_quantization<do_quant>::type;
+  using BatchInputT = typename use_bfloat16<do_bf16>::type;
+  using BertContextT = BertContext<InputT, BatchInputT>;
+
+  BertContextT ctx;
+  BertLayer<BertContextT> *bert_layers[LAYERS];
   Layer_minmax bert_layers_minmax[12] = {
       {-10.85244083404541015625, 4.14164829254150390625, -1.6212508678436279296875, 2.18305110931396484375, -64.5349578857421875, 9.17784881591796875, -0.16926576197147369384765625, 12.69039154052734375},
       {-10.01922702789306640625, 3.2598330974578857421875, -2.52011966705322265625, 3.17220592498779296875, -70.322662353515625, 4.564808368682861328125, -0.16925294697284698486328125, 10.93472957611083984375},
@@ -136,7 +148,7 @@ void benchmarkMB1(int tokenSize, LayerWeights *weights, float *input)
 
   for (int i = 0; i < LAYERS; ++i)
   {
-    bert_layers[i] = new BertLayer(ctx);
+    bert_layers[i] = new BertLayer<BertContextT>(ctx);
     bert_layers[i]->setWeights(weights[i].queryWeight, weights[i].queryBias,
                                weights[i].keyWeight, weights[i].keyBias,
                                weights[i].valueWeight, weights[i].valueBias,
@@ -207,7 +219,43 @@ try {
   // Fake weights
   LayerWeights weights[12];
 
-  benchmarkMB1(tokenSize, weights, input.data());
+  // Get BertLayer mode from command line args to let CI decide what to run.
+  // Defaults to FP32.
+  std::vector<std::string> flags;
+  for (int i = 1; i < argc; ++i)
+  {
+      flags.push_back(argv[i]);
+  }
+  bool do_quantization = std::find(begin(flags), end(flags), "--quantization") != end(flags);
+  bool do_bfloat16 = std::find(begin(flags), end(flags), "--bfloat16") != end(flags);
+  std::cout << "BertLayer mode: " << (do_quantization ? "int8 quantization" : "no quantization") << ", "
+                                  << (do_bfloat16 ? "bfloat16" : "fp32") << std::endl;
+  
+  // Ugly, but we don't know the BertLayer mode at compile time.
+  if (do_quantization)
+  {
+    if (do_bfloat16)
+    {
+        benchmarkMB1<true, true>(tokenSize, weights, input.data());
+    }
+    else
+    {
+        benchmarkMB1<true, false>(tokenSize, weights, input.data());
+    }
+  }
+  else
+  {
+    if (do_bfloat16)
+    {
+        benchmarkMB1<false, true>(tokenSize, weights, input.data());
+    }
+    else
+    {
+        benchmarkMB1<false, false>(tokenSize, weights, input.data());
+    }
+  }
+
+
 } catch (const std::exception& e) {
   std::cerr << "Caught exception: " << e.what() << std::endl;
   return 1;

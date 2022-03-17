@@ -10,6 +10,7 @@
 #include "dnnl_attr.hpp"
 #include "dnnl_data.hpp"
 #include "dnnl_ops.hpp"
+#include "bert_type_traits.h"
 
 #include <algorithm>
 #include <cstring>
@@ -23,8 +24,6 @@
 
 
 //#define dynamic_quant
-
-#define BFLOAT16_ATTENTION 0
 
 namespace dnnl_wrappers {
 /// Reinterpret memory keeping origin data_type
@@ -46,15 +45,20 @@ struct Layer_minmax {
     Min_max intermediate_post;
 };
 
+template <class BertContextT,
+    class = std::enable_if_t<is_template_instance<BertContext, BertContextT>::value>
+>
 class BertLayer
 {
-    using input_t = BertContext::input_t;
+    using batch_input_t = typename BertContextT::batch_input_t;
+    using input_t = typename BertContextT::input_t;
+
 public:
-    static constexpr int head_size = BertContext::head_size;
+    static constexpr int head_size = BertContextT::head_size;
 
     // hiddenSize 768 Hidden layer neurons, number of hidden units
     // intermediateSize 3072 feed-forward/filter size dimension 4*hiddensize 
-    BertLayer(BertContext &_ctx, int maxTokenSize = 128, int hiddenSize = 768, int intermediateSize = 3072) :
+    BertLayer(BertContextT &_ctx, int maxTokenSize = 128, int hiddenSize = 768, int intermediateSize = 3072) :
     ctx(_ctx) {
         this->maxTokenSize = maxTokenSize;
         this->hiddenSize = hiddenSize;
@@ -334,12 +338,6 @@ private:
             return BuildMatMul<Src_T, Weight_T, Bias_T, Dst_T>(m, n, k, weight_scale, bias_scale, weight, bias, attrs);
     }
 
-#if BFLOAT16_ATTENTION
-    using batch_input_t = bfloat16;
-#else
-    using batch_input_t = float;
-#endif
-
     std::unique_ptr<dnnl_wrappers::MatMul> BuildBatchMatMul1WithScaleBias() {
         const int m = maxTokenSize;
         const int k = head_size;
@@ -389,7 +387,7 @@ private:
     }
 
 private:
-    BertContext &ctx;
+    BertContextT &ctx;
     int maxTokenSize;
     int hiddenSize;
     int intermediateSize;

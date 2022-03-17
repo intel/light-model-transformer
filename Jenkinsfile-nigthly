@@ -5,10 +5,10 @@ pipeline {
             agent any
             steps {
                 sh 'mkdir -p build'
-                sh 'printf "Compiler\tModel\tTF\tCorrect/Total\tResult\n" > build/accuracy.csv'
+                sh 'printf "Compiler\tModel\tTF\tQuantization\tBFloat16\tCorrect/Total\tResult\n" > build/accuracy.csv'
                 stash includes: 'build/accuracy.csv', name: 'accuracy'
 
-                sh 'printf "Compiler\tApp\tTF\tAverage Time\n" > build/benchmark.csv'
+                sh 'printf "Compiler\tApp\tTF\tQuantization\tBFloat16\tAverage Time\n" > build/benchmark.csv'
                 stash includes: 'build/benchmark.csv', name: 'benchmark'
             }
         }
@@ -23,6 +23,14 @@ pipeline {
                         name 'CXX_COMPILER'
                         values 'icpc', 'g++', 'icpx'
                     }
+                    axis {
+                        name 'QUANTIZATION'
+                        values '--quantization', '--no-quantization'
+                    }
+                    axis {
+                        name 'BFLOAT16'
+                        values '--bfloat16', '--no-bfloat16'
+                    }
                 }
                 // WC1-1081: icpc fails to compile TF >= 2.6.0
                 excludes {
@@ -34,6 +42,12 @@ pipeline {
                         axis {
                             name 'CXX_COMPILER'
                             values 'icpc'
+                        }
+                    }
+                    exclude {
+                        axis {
+                            name 'BFLOAT16'
+                            values '--bfloat16'
                         }
                     }
                 }
@@ -65,6 +79,9 @@ pipeline {
                                     cmake --build . --config Debug --target all -v -j --
                                 '''
                             }
+                            sh '''#!/bin/bash
+                                ./python/proto/compile_proto.sh
+                            '''
                         }
                     }
                     stage('benchmark') {
@@ -76,7 +93,7 @@ pipeline {
                                         source /opt/intel/oneapi/setvars.sh intel64
                                         ./build/tests/benchmark/benchmark $a | tee build/benchmark.log
                                     '''
-                                    sh "grep 'Average Time' build/benchmark.log | sed 's/.*Time: \\(.*\\)/${CXX_COMPILER}\\tbenchmark.exe $a\\t${TF_VERSION}\\t\\1/' >> build/benchmark.csv"
+                                    sh "grep 'Average Time' build/benchmark.log | sed 's/.*Time: \\(.*\\)/${CXX_COMPILER}\\tbenchmark.exe $a\\t${TF_VERSION}\\t${QUANTIZATION}\\t${BFLOAT16}\\t\\1/' >> build/benchmark.csv"
                                 }
                             }
                             stash includes: 'build/benchmark.csv', name: 'benchmark'
@@ -88,13 +105,17 @@ pipeline {
                             sh '''#!/bin/bash
                                 export TF_VERSION=${TF_VERSION}
                                 export TF_MAJOR=${TF_VERSION%%.*}
-                                export Python3_EXECUTABLE=${Python3_EXECUTABLE}
+                                export CXX_COMPILER=${CXX_COMPILER}
+                                export QUANTIZATION=${QUANTIZATION}
+                                export BFLOAT16=${BFLOAT16}
                                 export path_to_bertop=$(pwd)/build/src/tf_op/libBertOp.so   # accuracy_launcher.sh will pushd 
                                 export out_file=$(pwd)/build/accuracy.csv                   # to its directory so use absolute
                                 base_dir=/data/tf${TF_MAJOR}                                # paths to external resources
+                                export Python3_EXECUTABLE=${Python3_EXECUTABLE}
+                                export PYTHONPATH=${PYTHONPATH}:$(pwd)/python               # Need model modifier on PYTHONPATH
 
                                 source /opt/intel/oneapi/setvars.sh intel64
-                                tests/tf${TF_MAJOR}_ops_accuracy/accuracy_launcher.sh ${base_dir} ${CXX_COMPILER}
+                                tests/tf${TF_MAJOR}_ops_accuracy/accuracy_launcher.sh ${base_dir}
                             '''
                             stash includes: 'build/accuracy.csv', name: 'accuracy'
                         }
