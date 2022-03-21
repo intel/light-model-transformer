@@ -215,7 +215,7 @@ attr {
 attr {
   key: "MaskT"
   value {
-    type: DT_FLOAT
+    type: DT_INT32
   }
 }
 attr {
