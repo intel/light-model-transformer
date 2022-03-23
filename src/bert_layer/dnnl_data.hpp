@@ -14,13 +14,9 @@ namespace dnnl_wrappers {
 
 class DataSource {
 public:
-    DataSource(const dnnl::memory& mem = {})
-        : mem_{mem}
-        , attr_{nullptr} {}
-
-    DataSource(const dnnl::memory& mem, const dnnl::primitive_attr& attr)
-        : mem_{mem}
-        , attr_{new dnnl::primitive_attr(attr)} {}
+    DataSource(const dnnl::memory& mem = {}, BuildAttrs attr = {})
+        : mem_{mem} 
+        , attr_{attr} {}
 
     DataSource(const DataSource& other) = default;
     DataSource(DataSource&& other) = default;
@@ -33,21 +29,20 @@ public:
              return mem_;
         }
 
-        if (!attr_ && mem_.get_engine() == stm.get_engine() && mem_.get_desc() == md) {
+        if (attr_.Empty() && mem_.get_engine() == stm.get_engine() && mem_.get_desc() == md) {
             return mem_;
         }
-
         dnnl::memory result{md, stm.get_engine()};
 
-        dnnl::reorder rdr{mem_, result, attr_ ? *attr_ : dnnl::primitive_attr{}};
+        // No need to check for nullptr, implicitly convert to dnnl::primitive_attr
+        dnnl::reorder rdr{mem_, result, attr_};
         rdr.execute(stm, mem_, result);
         return result;
     }
 
 private:
     dnnl::memory mem_;
-    // use pointer to make it optional
-    std::unique_ptr<dnnl::primitive_attr> attr_;
+    BuildAttrs attr_;
 };
 
 class CachedDataSource : public DataSource {
@@ -95,15 +90,11 @@ dnnl::memory CloneMemory(const dnnl::engine& eng, dnnl::stream& stm, dnnl::memor
 }
 
 DataSource ScaledData(const dnnl::memory& mem, float scale) {
-    return scale != BuildAttrs::noScale
-        ? DataSource(mem, BuildAttrs().Scale(scale))
-        : DataSource(mem);
+        return DataSource(mem, BuildAttrs().Scale(scale));
 }
 
 CachedDataSource ScaledCachedData(const dnnl::memory& mem, float scale) {
-    return  scale != BuildAttrs::noScale
-        ? CachedDataSource(mem, BuildAttrs().Scale(scale))
-        : CachedDataSource(mem);
+    return  CachedDataSource(mem, BuildAttrs().Scale(scale));
 }
 
 } // namespace dnnl_wrappers
