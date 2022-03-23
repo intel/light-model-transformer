@@ -79,9 +79,6 @@ pipeline {
                                     cmake --build . --config Debug --target all -v -j --
                                 '''
                             }
-                            sh '''#!/bin/bash
-                                ./python/proto/compile_proto.sh
-                            '''
                         }
                     }
                     stage('benchmark') {
@@ -89,10 +86,10 @@ pipeline {
                             unstash 'benchmark'
                             script {
                                 for(a in [10, 1000]) {
-                                    sh '''#!/bin/bash
+                                    sh """#!/bin/bash
                                         source /opt/intel/oneapi/setvars.sh intel64
-                                        ./build/tests/benchmark/benchmark $a | tee build/benchmark.log
-                                    '''
+                                        ./build/tests/benchmark/benchmark ${a} ${QUANTIZATION} ${BFLOAT16} | tee build/benchmark.log
+                                    """
                                     sh "grep 'Average Time' build/benchmark.log | sed 's/.*Time: \\(.*\\)/${CXX_COMPILER}\\tbenchmark.exe $a\\t${TF_VERSION}\\t${QUANTIZATION}\\t${BFLOAT16}\\t\\1/' >> build/benchmark.csv"
                                 }
                             }
