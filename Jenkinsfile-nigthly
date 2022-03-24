@@ -55,7 +55,7 @@ pipeline {
                     dockerfile {
                         filename 'Dockerfile/Dockerfile-ci'
                         label 'JenkinsServer'
-                        additionalBuildArgs  '--build-arg TF_VERSION=${TF_VERSION}'
+                        additionalBuildArgs  '--target=base --build-arg TF_VERSION=${TF_VERSION}'
                         // TODO: WC1-1063 using of more cpus causes the accuracy script to hang or segfault
                         args '--cpuset-cpus="0-10" --init \
                             -v ${jenkins_data}:/data'
