@@ -119,7 +119,7 @@ class PatternReplacer:
         return next(node for node in self.__node_collection if node.name == stripped_node_name)
 
     def _strip_node_name(self, node_name: str) -> str:
-        return node_name.split(':', 1)[0]
+        return node_name.lstrip('^').split(':', 1)[0]
 
     def _node_to_input_name(self, node: NodeDef) -> str:
         if not self.__use_function_naming:
@@ -163,9 +163,18 @@ class PatternReplacer:
         else:
             remap_name = remap_to.name
 
+        def _is_control_dependency(input: str) -> bool:
+            return input.startswith('^')
+
         for node in self.__node_collection:
             for i in range(len(node.input)):
-                if self._strip_node_name(node.input[i]) in remap_from:
+                input = node.input[i]
+                if self._strip_node_name(input) in remap_from:
+
+                    if _is_control_dependency(input):
+                        raise NotImplementedError(f'Encountered control dependency {input}. '
+                            'Control dependencies are not supported by the PatternReplacer.')
+
                     node.input[i] = remap_name
                     self.log.debug(
                         f'Modified node {node.name}. Input {node.input[i]} remapped to {remap_name}.')

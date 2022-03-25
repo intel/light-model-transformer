@@ -64,12 +64,14 @@ def main():
 
     pattern_replacer = PatternReplacer(graph)
 
-    if pattern_replacer.replace(recipe):
+    try:
+        if pattern_replacer.replace(recipe):
+            with open(args.output, 'wb') as f:
+                f.write(model.SerializeToString())
 
-        with open(args.output, 'wb') as f:
-            f.write(model.SerializeToString())
-
-
+    except NotImplementedError as e:
+        log.error(f'Pattern replacement failed with error: {e}')
+        exit(1)
 
 if __name__ == '__main__':
     main()

@@ -16,6 +16,7 @@ import os
 
 
 def main():
+    # TODO: (krzychut) Add log verbosity option
     parser = argparse.ArgumentParser(
         description='Extract a pattern from a tensorflow model graph.')
     parser.add_argument('path')
@@ -53,10 +54,17 @@ def main():
         print('Frozen model graph loaded successfully.')
 
     extractor = PatternExtractor(graph)
-    pattern = extractor.extract(seed_nodes=args.seed_nodes, barrier_nodes=args.barrier_nodes,
+    
+    try:
+        pattern = extractor.extract(seed_nodes=args.seed_nodes, barrier_nodes=args.barrier_nodes,
                                 barrier_ops=args.barrier_ops, function_name=args.function)
+    except NotImplementedError as e:
+        print(f'Pattern extraction failed with error: {e}')
+        exit(1)
+    
     if pattern is None:
-        raise RuntimeError("Subgraph not found in graph")
+        print('Pattern extraction failed without error. Check input parameters.')
+        exit(1)
 
     all_pattern_nodes = [node for node in pattern.seed_nodes] + \
         [node for node in pattern.internal_nodes]

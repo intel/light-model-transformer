@@ -8,7 +8,7 @@ from tensorflow.core.framework.node_def_pb2 import NodeDef
 
 from queue import LifoQueue as Stack
 
-from typing import Optional, Sequence, Dict, List, Tuple
+from typing import Optional, Sequence, Dict, List, Tuple, Iterable
 
 from copy import copy
 
@@ -92,6 +92,9 @@ class PatternLocator:
 
         while not open_nodes.empty():
             current_node, current_ref_node = open_nodes.get()
+            self._throw_if_have_control_dependencies(
+                [current_node, current_ref_node])
+
             self.log.debug(
                 f'Analyzing node {current_node.name} against ref node {current_ref_node.name}')
 
@@ -149,6 +152,15 @@ class PatternLocator:
                 return FAIL
 
         return True, extended_node_mapping
+
+    def _throw_if_have_control_dependencies(self, nodes: Iterable[NodeDef]) -> None:
+        def _throw_if_has_control_dependency(node: NodeDef) -> None:
+            if any([input.startswith('^') for input in node.input]):
+                raise NotImplementedError(f'Encountered control dependency {input}. '
+                    'Control dependencies are not supported by the PatternLocator')
+
+        for node in nodes:
+            _throw_if_has_control_dependency(node)
 
     def _are_nodes_matching(self, node: NodeDef, ref_node: NodeDef, node_mapping: Dict[str, str]) -> bool:
 

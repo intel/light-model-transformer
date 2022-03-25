@@ -133,6 +133,8 @@ class PatternExtractor:
             node_input) for node_input in node.input]
 
         fanin_nodes = [node for node in nodes if node.name in input_node_names]
+        assert(len(input_node_names) == len(fanin_nodes))
+
         return fanin_nodes
 
     def _input_name_to_node_name(self, input_name: str) -> str:
@@ -144,7 +146,16 @@ class PatternExtractor:
 
         We extract the node name by taking the substring up to (not including) the first colon.
         '''
+
+        def _is_control_dependency(input: str) -> bool:
+            return input.startswith('^')
+
+        if _is_control_dependency(input_name):
+            raise NotImplementedError(f'Encountered control dependency {input_name}. '
+                'Control dependencies are not supported by the pattern extractor.')
+
         return input_name.split(':', 1)[0]
+
 
     def _verify_all_outputs_are_seed_nodes(self, pattern: Pattern, nodes: Iterable[NodeDef]) -> None:
         internal_node_names = [node.name for node in pattern.internal_nodes]
