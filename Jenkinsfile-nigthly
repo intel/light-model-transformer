@@ -10,6 +10,9 @@ pipeline {
 
                 sh 'printf "Compiler\tApp\tTF\tQuantization\tBFloat16\tAverage Time\n" > build/benchmark.csv'
                 stash includes: 'build/benchmark.csv', name: 'benchmark'
+                
+                sh 'printf "Compiler\tModel\tQuantization\tBFloat16\tResult\tLatency\n" > build/model_zoo.csv'
+                stash includes: 'build/model_zoo.csv', name: 'model_zoo'
             }
         }
         stage('BuildAndTest') {
@@ -70,7 +73,7 @@ pipeline {
                             // TODO: use virtualenv?
                             sh '${Python3_EXECUTABLE} -m pip install -r requirements-tf${TF_VERSION%%.*}.txt'
                             dir('build') {
-                                sh 'rm -rf CMakeCache.txt CMakeFiles accuracy.csv acc.html benchmark.csv bench.html'
+                                sh 'rm -rf CMakeCache.txt CMakeFiles accuracy.csv acc.html benchmark.csv bench.html model_zoo.csv zoo.html'
                                 sh '''#!/bin/bash
                                     source /opt/intel/oneapi/setvars.sh intel64
 
@@ -117,6 +120,69 @@ pipeline {
                             stash includes: 'build/accuracy.csv', name: 'accuracy'
                         }
                     }
+                    stage('model-zoo'){
+                        steps{
+                            unstash 'model_zoo'
+                            sh '''#!/bin/bash
+                                set -e
+                                export PYTHONPATH=$PYTHONPATH:$(pwd)/model_zoo/models/language_modeling/tensorflow/bert_large/inference
+                                export PYTHONPATH=${PYTHONPATH}:$(pwd)/python
+                                OUTPUT_DIR=$(mktemp -d)
+                                GLUE_DIR=/data/tf1/download_glue/glue_data
+                                BERT_BASE_DIR=/data/model_zoo/bert-base-tf2
+                                path_to_bertop=$(pwd)/build/src/tf_op/libBertOp.so
+                                source /opt/intel/oneapi/setvars.sh intel64
+                                FROZEN_DIR=/data/model_zoo/frozen
+                                python tests/model_zoo/run_model_zoo.py \
+                                  --frozen_graph_path=$FROZEN_DIR/frozen_model.pb \
+                                  --output_dir=$OUTPUT_DIR \
+                                  --bert_config_file=$BERT_BASE_DIR/bert_config.json \
+                                  --do_train=False \
+                                  --precision=fp32 \
+                                  --do_lower_case=True \
+                                  --task_name=MRPC \
+                                  --do_eval=true \
+                                  --vocab_file=$BERT_BASE_DIR/vocab.txt \
+                                  --data_dir=$GLUE_DIR/MRPC \
+                                  --eval_batch_size=1 \
+                                  --experimental_gelu=False \
+                                  --max_seq_length=128 \
+                                  --inter_op_parallelism_threads=1 \
+                                  --intra_op_parallelism_threads=18 \
+                                  $path_to_bertop 2>&1 | tee build/model_zoo.log   
+                                tmpdir=$(mktemp -d)
+                                cp -R /data/model_zoo/frozen_modified/* $tmpdir/
+                                FROZEN_DIR=$tmpdir
+                                python -m model_modifier.configure_bert_op $QUANTIZATION $BFLOAT16 $FROZEN_DIR/frozen_graph.pb
+                                python tests/model_zoo/run_model_zoo.py \
+                                  --frozen_graph_path=$FROZEN_DIR/frozen_graph.pb \
+                                  --output_dir=$OUTPUT_DIR \
+                                  --bert_config_file=$BERT_BASE_DIR/bert_config.json \
+                                  --do_train=False \
+                                  --precision=fp32 \
+                                  --do_lower_case=True \
+                                  --task_name=MRPC \
+                                  --do_eval=true \
+                                  --vocab_file=$BERT_BASE_DIR/vocab.txt \
+                                  --data_dir=$GLUE_DIR/MRPC \
+                                  --eval_batch_size=1 \
+                                  --experimental_gelu=False \
+                                  --max_seq_length=128 \
+                                  --inter_op_parallelism_threads=1 \
+                                  --intra_op_parallelism_threads=18 \
+                                  $path_to_bertop 2>&1 | tee -a build/model_zoo.log  
+                            '''
+                            sh '''
+                                model_zoo1=$(grep -m1 'w:  eval_accuracy ' build/model_zoo.log | sed 's/.*= \\(.*\\)/'${CXX_COMPILER}'\tfrozen\t'${QUANTIZATION}'\t'${BFLOAT16}'\t\\1/' )
+                                model_zoo2=$(grep -m1 'Latency is ' build/model_zoo.log | sed 's/.*is \\(.*\\)/\\1/' )
+                                model_zoo3=$(grep 'w:  eval_accuracy ' build/model_zoo.log | sed 's/.*= \\(.*\\)/'${CXX_COMPILER}'\tfrozen_modified\t'${QUANTIZATION}'\t'${BFLOAT16}'\t\\1/' | tail -1)
+                                model_zoo4=$(grep 'Latency is ' build/model_zoo.log | sed 's/.*is \\(.*\\)/\\1/' | tail -1)
+                                echo "$model_zoo1\t$model_zoo2" >> build/model_zoo.csv
+                                echo "$model_zoo3\t$model_zoo4" >> build/model_zoo.csv
+                            ''' 
+                            stash includes: 'build/model_zoo.csv', name: 'model_zoo'
+                        }
+                    }
                 }
             }
         }
@@ -134,6 +200,11 @@ pipeline {
                 sh "${Python3_EXECUTABLE} -c \"import pandas as pd; pd.read_csv('build/benchmark.csv', sep='\\t', header=None).to_html('bench.html', index=False, header=False)\""
                 archiveArtifacts artifacts: "bench.html"
                 step([$class: 'ACIPluginPublisher', name: 'bench.html', shownOnProjectPage: true])
+
+                unstash 'model_zoo'
+                sh "${Python3_EXECUTABLE} -c \"import pandas as pd; pd.read_csv('build/model_zoo.csv', sep='\\t', header=None).dropna().to_html('zoo.html', index=False, header=False)\""
+                archiveArtifacts artifacts: "zoo.html"
+                step([$class: 'ACIPluginPublisher', name: 'zoo.html', shownOnProjectPage: true])
             }
         }
     }
