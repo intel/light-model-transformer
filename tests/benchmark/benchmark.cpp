@@ -26,93 +26,67 @@ static const int attentionHeadNum = 12;
 struct LayerWeights
 {
   LayerWeights()
+    : queryWeight(hiddenSize * hiddenSize)
+    , keyWeight(hiddenSize * hiddenSize)
+    , valueWeight(hiddenSize * hiddenSize)
+    , attentionOutputWeight(hiddenSize * hiddenSize)
+    , intermediateWeight(hiddenSize * intermediateSize)
+    , outputWeight(hiddenSize * intermediateSize)
+    , queryBias(hiddenSize)
+    , keyBias(hiddenSize)
+    , valueBias(hiddenSize)
+    , attentionOutputBias(hiddenSize)
+    , outputBias(hiddenSize)
+    , gamma1(hiddenSize)
+    , beta1(hiddenSize)
+    , gamma2(hiddenSize)
+    , beta2(hiddenSize)
+    , intermediateBias(intermediateSize)
   {
-    queryWeight = new float[hiddenSize * hiddenSize];
-    keyWeight = new float[hiddenSize * hiddenSize];
-    valueWeight = new float[hiddenSize * hiddenSize];
-    attentionOutputWeight = new float[hiddenSize * hiddenSize];
-    intermediateWeight = new float[hiddenSize * intermediateSize];
-    outputWeight = new float[intermediateSize * hiddenSize];
+    std::minstd_rand gen;
+    std::uniform_real_distribution<float> dist(-0.5f, 0.5f);
+    auto rand = [&gen, &dist](){ return dist(gen); };
 
-    queryBias = new float[hiddenSize];
-    keyBias = new float[hiddenSize];
-    valueBias = new float[hiddenSize];
-    attentionOutputBias = new float[hiddenSize];
-    intermediateBias = new float[intermediateSize];
-    outputBias = new float[hiddenSize];
-    gamma1 = new float[hiddenSize];
-    beta1 = new float[hiddenSize];
-    gamma2 = new float[hiddenSize];
-    beta2 = new float[hiddenSize];
+    std::generate(queryWeight.begin(), queryWeight.end(), rand);
+    std::generate(keyWeight.begin(), keyWeight.end(), rand);
+    std::generate(valueWeight.begin(), valueWeight.end(), rand);
+    std::generate(attentionOutputWeight.begin(), attentionOutputWeight.end(), rand);
 
-    for (int i = 0; i < hiddenSize * hiddenSize; ++i)
-    {
-      queryWeight[i] = 1.0f * rand() / RAND_MAX - 0.5f;
-      keyWeight[i] = 1.0f * rand() / RAND_MAX - 0.5f;
-      valueWeight[i] = 1.0f * rand() / RAND_MAX - 0.5f;
-      attentionOutputWeight[i] = 1.0f * rand() / RAND_MAX - 0.5f;
-    }
-    for (int i = 0; i < hiddenSize * intermediateSize; ++i)
-    {
-      intermediateWeight[i] = 1.0f * rand() / RAND_MAX - 0.5f;
-      outputWeight[i] = 1.0f * rand() / RAND_MAX - 0.5f;
-    }
-    for (int i = 0; i < hiddenSize; ++i)
-    {
-      queryBias[i] = 1.0f * rand() / RAND_MAX - 0.5f;
-      keyBias[i] = 1.0f * rand() / RAND_MAX - 0.5f;
-      valueBias[i] = 1.0f * rand() / RAND_MAX - 0.5f;
-      attentionOutputBias[i] = 1.0f * rand() / RAND_MAX - 0.5f;
-      outputBias[i] = 1.0f * rand() / RAND_MAX - 0.5f;
-      gamma1[i] = 1.0f * rand() / RAND_MAX - 0.5f;
-      beta1[i] = 1.0f * rand() / RAND_MAX - 0.5f;
-      gamma2[i] = 1.0f * rand() / RAND_MAX - 0.5f;
-      beta2[i] = 1.0f * rand() / RAND_MAX - 0.5f;
-    }
-    for (int i = 0; i < intermediateSize; ++i)
-    {
-      intermediateBias[i] = 1.0f * rand() / RAND_MAX - 0.5f;
-    }
+    std::generate(intermediateWeight.begin(), intermediateWeight.end(), rand);
+    std::generate(outputWeight.begin(), outputWeight.end(), rand);
+
+    std::generate(queryBias.begin(), queryBias.end(), rand);
+    std::generate(keyBias.begin(), keyBias.end(), rand);
+    std::generate(valueBias.begin(), valueBias.end(), rand);
+    std::generate(attentionOutputBias.begin(), attentionOutputBias.end(), rand);
+    std::generate(outputBias.begin(), outputBias.end(), rand);
+    std::generate(gamma1.begin(), gamma1.end(), rand);
+    std::generate(beta1.begin(), beta1.end(), rand);
+    std::generate(gamma2.begin(), gamma2.end(), rand);
+    std::generate(beta2.begin(), beta2.end(), rand);
+
+    std::generate(intermediateBias.begin(), intermediateBias.end(), rand);
   }
 
-  ~LayerWeights()
-  {
-    delete[] queryWeight;
-    delete[] keyWeight;
-    delete[] valueWeight;
-    delete[] attentionOutputWeight;
-    delete[] intermediateWeight;
-    delete[] outputWeight;
+  std::vector<float> queryWeight;
+  std::vector<float> keyWeight;
+  std::vector<float> valueWeight;
+  std::vector<float> attentionOutputWeight;
 
-    delete[] queryBias;
-    delete[] keyBias;
-    delete[] valueBias;
-    delete[] attentionOutputBias;
-    delete[] intermediateBias;
-    delete[] outputBias;
-    delete[] gamma1;
-    delete[] beta1;
-    delete[] gamma2;
-    delete[] beta2;
-  }
+  std::vector<float> intermediateWeight;
+  std::vector<float> outputWeight;
 
-  float *queryWeight;
-  float *keyWeight;
-  float *valueWeight;
-  float *attentionOutputWeight;
-  float *intermediateWeight;
-  float *outputWeight;
+  std::vector<float> queryBias;
+  std::vector<float> keyBias;
+  std::vector<float> valueBias;
+  std::vector<float> attentionOutputBias;
+  std::vector<float> outputBias;
+  std::vector<float> gamma1;
+  std::vector<float> beta1;
+  std::vector<float> gamma2;
+  std::vector<float> beta2;
 
-  float *queryBias;
-  float *keyBias;
-  float *valueBias;
-  float *attentionOutputBias;
-  float *intermediateBias;
-  float *outputBias;
-  float *gamma1;
-  float *beta1;
-  float *gamma2;
-  float *beta2;
+  std::vector<float> intermediateBias;
 };
 
 // MiniBatch = 1
@@ -146,17 +120,18 @@ void benchmarkMB1(int tokenSize, LayerWeights *weights, float *input)
   };
 
 
+
   for (int i = 0; i < LAYERS; ++i)
   {
     bert_layers[i] = new BertLayer<BertContextT>(ctx);
-    bert_layers[i]->setWeights(weights[i].queryWeight, weights[i].queryBias,
-                               weights[i].keyWeight, weights[i].keyBias,
-                               weights[i].valueWeight, weights[i].valueBias,
-                               weights[i].attentionOutputWeight, weights[i].attentionOutputBias,
-                               weights[i].gamma1, weights[i].beta1,
-                               weights[i].intermediateWeight, weights[i].intermediateBias,
-                               weights[i].outputWeight, weights[i].outputBias,
-                               weights[i].gamma2, weights[i].beta2,
+    bert_layers[i]->setWeights(weights[i].queryWeight.data(), weights[i].queryBias.data(),
+                               weights[i].keyWeight.data(), weights[i].keyBias.data(),
+                               weights[i].valueWeight.data(), weights[i].valueBias.data(),
+                               weights[i].attentionOutputWeight.data(), weights[i].attentionOutputBias.data(),
+                               weights[i].gamma1.data(), weights[i].beta1.data(),
+                               weights[i].intermediateWeight.data(), weights[i].intermediateBias.data(),
+                               weights[i].outputWeight.data(), weights[i].outputBias.data(),
+                               weights[i].gamma2.data(), weights[i].beta2.data(),
                                bert_layers_minmax[i]);
   }
 
@@ -214,7 +189,7 @@ try {
   std::vector<float> input(batchSize * tokenSize * hiddenSize);
   std::minstd_rand gen; //faster than MT
   std::uniform_real_distribution<float> dist(-0.5f, 0.5f);
-  std::generate(input.begin(), input.end(), [&](){ return  dist(gen); });
+  std::generate(input.begin(), input.end(), [&gen, &dist](){ return  dist(gen); });
 
   // Fake weights
   LayerWeights weights[12];
