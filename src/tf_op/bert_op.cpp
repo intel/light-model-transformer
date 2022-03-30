@@ -48,7 +48,8 @@ class BertOp : public OpKernel
     using BertContextT = BertContext<InputT, BatchInputT>;
 
 public:
-    explicit BertOp(OpKernelConstruction *context) : OpKernel(context)
+    explicit BertOp(OpKernelConstruction *context) : OpKernel{context}, ctx{}, layers{0}, hiddenSize{0}, initialized{false}
+
     {
         {
             std::stringstream ss;
@@ -69,8 +70,6 @@ public:
             auto t = new BertLayer<BertContextT>(ctx);
             this->bert_layers.push_back(t);
         }
-
-        this->initialized = false;
     }
 
     ~BertOp()
