@@ -11,7 +11,7 @@ pipeline {
                 sh 'printf "Compiler\tApp\tTF\tQuantization\tBFloat16\tAverage Time\n" > build/benchmark.csv'
                 stash includes: 'build/benchmark.csv', name: 'benchmark'
                 
-                sh 'printf "Compiler\tModel\tQuantization\tBFloat16\tResult\tLatency\n" > build/model_zoo.csv'
+                sh 'printf "Compiler\tModel\tTF\tQuantization\tBFloat16\tResult\tLatency\n" > build/model_zoo.csv'
                 stash includes: 'build/model_zoo.csv', name: 'model_zoo'
             }
         }
@@ -173,9 +173,9 @@ pipeline {
                                   $path_to_bertop 2>&1 | tee -a build/model_zoo.log  
                             '''
                             sh '''
-                                model_zoo1=$(grep -m1 'w:  eval_accuracy ' build/model_zoo.log | sed 's/.*= \\(.*\\)/'${CXX_COMPILER}'\tfrozen\t'${QUANTIZATION}'\t'${BFLOAT16}'\t\\1/' )
+                                model_zoo1=$(grep -m1 'w:  eval_accuracy ' build/model_zoo.log | sed 's/.*= \\(.*\\)/'${CXX_COMPILER}'\tfrozen\t'${TF_VERSION}'\t'${QUANTIZATION}'\t'${BFLOAT16}'\t\\1/' )
                                 model_zoo2=$(grep -m1 'Latency is ' build/model_zoo.log | sed 's/.*is \\(.*\\)/\\1/' )
-                                model_zoo3=$(grep 'w:  eval_accuracy ' build/model_zoo.log | sed 's/.*= \\(.*\\)/'${CXX_COMPILER}'\tfrozen_modified\t'${QUANTIZATION}'\t'${BFLOAT16}'\t\\1/' | tail -1)
+                                model_zoo3=$(grep 'w:  eval_accuracy ' build/model_zoo.log | sed 's/.*= \\(.*\\)/'${CXX_COMPILER}'\tfrozen_modified\t'${TF_VERSION}'\t'${QUANTIZATION}'\t'${BFLOAT16}'\t\\1/' | tail -1)
                                 model_zoo4=$(grep 'Latency is ' build/model_zoo.log | sed 's/.*is \\(.*\\)/\\1/' | tail -1)
                                 echo "$model_zoo1\t$model_zoo2" >> build/model_zoo.csv
                                 echo "$model_zoo3\t$model_zoo4" >> build/model_zoo.csv
