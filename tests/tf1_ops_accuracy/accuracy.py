@@ -23,12 +23,21 @@ import tokenization
 if (not tf.__version__.startswith('1')):
     import tensorflow.compat.v1 as tf
 
-model_path = sys.argv[1]
-data_dir = sys.argv[2]
-op_path = sys.argv[3]
-
 flags = tf.flags
 FLAGS = flags.FLAGS
+
+flags.DEFINE_string(
+    "data_dir", None,
+    "The input data dir. Should contain the .tsv files (or other data files) "
+    "for the task.", required=True)
+
+flags.DEFINE_string(
+    "model_path", None,
+    "The directory containing bert model.", required=True)
+
+flags.DEFINE_string(
+    "op_path", None,
+    "Path to the custom bert operator.", required=True)
 
 flags.DEFINE_bool(
     "do_lower_case", True,
@@ -304,11 +313,11 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
 
 if __name__ == "__main__":
   processor = MrpcProcessor()
-  tf.load_op_library(op_path)
+  tf.load_op_library(FLAGS.op_path)
   label_list = processor.get_labels()
   print(label_list)
-
-  dev_examples = processor.get_dev_examples(data_dir)
+  model_path=FLAGS.model_path
+  dev_examples = processor.get_dev_examples(FLAGS.data_dir)
   print(len(dev_examples))
   print(dev_examples[0])
   print(FLAGS.vocab_file)
