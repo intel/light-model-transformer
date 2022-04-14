@@ -54,7 +54,7 @@ class PatternReplacer:
 
             if not success :
                 self.log.debug(
-                    f'Failed to locate the specified pattern in the target graph in \'{name}.\'')
+                    f'Failed to locate the specified pattern in the target graph {name}.')
                 continue
 
             self.__node_collection = node_collection
@@ -66,7 +66,7 @@ class PatternReplacer:
             self._delete_nodes_by_name(pattern_nodes)
             self._add_node_to_graph(recipe_copy.target_node)
 
-            self.log.info(f'Pattern located and replaced in \'{name}.\'')
+            self.log.info(f'Pattern located and replaced in {name}.')
 
             success_list.append(success)
 
@@ -112,7 +112,7 @@ class PatternReplacer:
             # This generally means the NodeDef in the Recipe is incorrect.
             else:
                 raise ValueError(
-                    f'Pattern input {recipe.target_node.input[i]} could not be mapped to any tensor in the target graph')
+                    f'Pattern input {recipe.target_node.input[i]} could not be mapped to any tensor in the target graph.')
 
     def _get_node_by_name(self, node_name: str) -> NodeDef:
         stripped_node_name = self._strip_node_name(node_name)

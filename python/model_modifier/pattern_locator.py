@@ -96,7 +96,7 @@ class PatternLocator:
                 [current_node, current_ref_node])
 
             self.log.debug(
-                f'Analyzing node {current_node.name} against ref node {current_ref_node.name}')
+                f'Analyzing node {current_node.name} against ref node {current_ref_node.name}.')
 
             # Check if current_ref_node was previously mapped to a target graph node.
             try:
@@ -139,7 +139,7 @@ class PatternLocator:
                             (current_node_input, current_ref_node_input))
                     elif current_ref_node_input is None:
                         self.log.debug(
-                            f'Node input {current_node.input[i]} corresponds to pattern input {current_ref_node.input[i]}')
+                            f'Node input {current_node.input[i]} corresponds to pattern input {current_ref_node.input[i]}.')
                         continue
                     else:
                         self.log.debug(

@@ -10,6 +10,7 @@ from tensorflow.core.framework.node_def_pb2 import NodeDef
 from queue import LifoQueue as Stack
 
 import sys
+import logging
 
 from typing import Sequence, List, Optional, Iterable, MutableSet
 
@@ -19,11 +20,15 @@ class PatternExtractor:
 
     def __init__(self, graph_def: GraphDef):
         self.graph_def = graph_def
+        self.log = logging.getLogger(f'{__name__}.PatternExtractor')
+
 
     def extract(self, seed_nodes: Sequence[str], barrier_nodes: Sequence[str], barrier_ops: Sequence[str], function_name: Optional[str] = None) -> Optional[Pattern]:
         if function_name is not None:
+            self.log.info(f'Extracting the pattern from function {function_name}.')
             return self._pattern_in_function(seed_nodes, barrier_nodes, barrier_ops, function_name)
         else:
+            self.log.info(f'Extracting the pattern from the graph_def.')
             return self._pattern_in_node_collection(seed_nodes, barrier_nodes, barrier_ops, self.graph_def.node)
 
     def _pattern_in_function(self, seed_nodes: Sequence[str], barrier_nodes: Sequence[str], barrier_ops: Sequence[str], function_name: str) -> Optional[Pattern]:
@@ -33,15 +38,18 @@ class PatternExtractor:
                 func.node_def for func in function_defs if func.signature.name == function_name)
             return self._pattern_in_node_collection(seed_nodes, barrier_nodes, barrier_ops, node_collection)
         except StopIteration:
-            print(
-                f'No function named \'{function_name}\'.', file=sys.stderr)
+            self.log.error(f'No function named {function_name}.')
             return None
 
     def _pattern_in_node_collection(self, seed_nodes: Sequence[str], barrier_nodes: Sequence[str], barrier_ops: Sequence[str], nodes: Iterable[NodeDef]) -> Optional[Pattern]:
         barrier_nodes = self._mark_specified_ops_as_barrier_nodes(
             barrier_nodes, barrier_ops, nodes)
 
-        self._validate_pattern_constraints(seed_nodes, barrier_nodes, nodes)
+        try:
+            self._validate_pattern_constraints(seed_nodes, barrier_nodes, nodes)
+        except ValueError as e:
+            self.log.error(f'Pattern constraints validation failed: {e}')
+            return None
 
         pattern = self._initialize_pattern(seed_nodes, nodes)
 
@@ -56,32 +64,36 @@ class PatternExtractor:
 
             # We've reached a 'barrier' node, stop exploring this branch and record this node as an input.
             if node.name in barrier_nodes:
+                self.log.debug(f'Encountered barrier node {node.name}. The node will be recorded as a pattern input.')
                 inputs_encountered.add(node.name)
                 continue
 
             # Nodes with no inputs (Placeholder for example) are not supported.
             if not node.input:
-                raise RuntimeError(
-                    f'Reached node {node.name} of type {node.op} with no inputs, and it is not a \'barrier\' node.')
+                self.log.error(f'Reached node {node.name} of type {node.op} with no inputs, and it is not a barrier node.')
+                return None
 
             if node.op in PatternExtractor.UNSUPPORTED_OPS:
-                raise RuntimeError(
-                    f'Node {node.name} has unsupported op type {node.op}')
+                self.log.error(f'Node {node.name} has unsupported op type {node.op}.')
+                return None
 
             # Record this node as part of the pattern, unless it's already a seed node
             if node not in pattern.seed_nodes and node not in pattern.internal_nodes:
+                self.log.debug(f'Recording pattern node {node.name}.')
                 pattern.internal_nodes.append(node)
 
-            # TODO: Handle control dependencies
             for fanin_node in self._get_fanin_nodes(node, nodes):
                 # If we have not not already expanded this node, add it to the open stack.
                 if fanin_node not in pattern.internal_nodes and \
                    fanin_node not in pattern.seed_nodes:
+                    self.log.debug(f'Adding node {fanin_node.name} to the processing stack.')
                     open_nodes.put(fanin_node)
 
-        # Non-seed-node outputs can be allowed when generating the pattern
-        # There can be debug side-channel outputs in the model, for example.
-        # They should probably NOT be allowed when replacing a pattern, however.
+        # Non-seed-node outputs can be allowed when generating the pattern.
+        # For example, the BERT-base model on TFHub has outputs additional outputs
+        # for each layer, but we don't need to specify each of them as a seed node
+        # for the model modifier to work.
+        # So, we have a check for this, but we don't need to be using it right now.
         # self._verify_all_outputs_are_seed_nodes(pattern, nodes)
 
         pattern.inputs.extend([n for n in inputs_encountered])
@@ -115,12 +127,12 @@ class PatternExtractor:
         for node_name in seed_nodes:
             if node_name not in node_names:
                 raise ValueError(
-                    f'Seed Node {node_name} not found in node collection')
+                    f'Seed Node {node_name} not found in node collection.')
 
         for node_name in barrier_nodes:
             if node_name not in node_names:
                 raise ValueError(
-                    f'Barrier Node {node_name} not found in node collection')
+                    f'Barrier Node {node_name} not found in node collection.')
 
     def _initialize_pattern(self, seed_nodes: Sequence[str], nodes: Iterable[NodeDef]) -> Pattern:
         pattern = Pattern()
@@ -165,4 +177,4 @@ class PatternExtractor:
                     input_node_name = self._input_name_to_node_name(node_input)
                     if input_node_name in internal_node_names:
                         raise RuntimeError(
-                            f'Node {node.name} takes input from node {input_node_name}, which is an internal node of the pattern')
+                            f'Node {node.name} takes input from node {input_node_name}, which is an internal node of the pattern.')
