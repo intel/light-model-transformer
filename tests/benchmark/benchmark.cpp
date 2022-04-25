@@ -182,9 +182,13 @@ int main(int argc, char **argv)
 try {
   if (argc > 1)
   {
-    benchmarkTimes = atoi(argv[1]);
+    benchmarkTimes = std::stoi(argv[1]);
   }
 
+  if (benchmarkTimes < 1)
+  {
+    throw std::invalid_argument("Amount of times benchmark is run cannot be less than 1");
+  }
   // Fake input
   std::vector<float> input(batchSize * tokenSize * hiddenSize);
   std::minstd_rand gen; //faster than MT
@@ -230,7 +234,12 @@ try {
     }
   }
 
-
+} catch (const std::invalid_argument& ia) {
+  std::cerr << "Caught invalid argument exception: " << ia.what() << std::endl;
+  return 1;
+} catch (const std::out_of_range& e) {
+  std::cerr << "Caught out of range exception: " << e.what() << std::endl;
+  return 1;
 } catch (const std::exception& e) {
   std::cerr << "Caught exception: " << e.what() << std::endl;
   return 1;
