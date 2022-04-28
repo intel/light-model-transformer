@@ -148,9 +148,9 @@ void benchmarkMB1(int tokenSize, LayerWeights *weights, float *input)
     auto buffer = dnnl_wrappers::AttachMemory(ctx.dnnl_context.getEngine(), dims, input, false);
 
     auto start = std::chrono::steady_clock::now();
-    for (int i = 0; i < LAYERS; ++i)
+    for (int j = 0; j < LAYERS; ++j)
     {
-      bert_layers[i]->forward(buffer);
+      bert_layers[j]->forward(buffer);
     }
     auto end = std::chrono::steady_clock::now();
 

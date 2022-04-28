@@ -74,7 +74,7 @@ public:
 
     ~BertOp()
     {
-        for (int i = 0; i < this->bert_layers.size(); ++i)
+        for (size_t i = 0; i < this->bert_layers.size(); ++i)
         {
             delete this->bert_layers[i];
         }
@@ -141,7 +141,7 @@ private:
     void initWeights(OpKernelContext *context)
     {
         int idx = 2;
-        for (int i = 0; i < this->bert_layers.size(); ++i)
+        for (size_t i = 0; i < this->bert_layers.size(); ++i)
         {
             float *queryW = (float *)context->input(idx++).tensor_data().data();
             float *queryB = (float *)context->input(idx++).tensor_data().data();
@@ -199,13 +199,12 @@ private:
     }
 
 private:
+    BertContextT ctx;
     int layers;
     int hiddenSize;
-
-    BertContextT ctx;
+    bool initialized;
     std::vector<BertLayer<BertContextT> *> bert_layers;
 
-    bool initialized;
     Layer_minmax bert_layers_minmax[12] = {
         {-10.85244083404541015625, 4.14164829254150390625, -1.6212508678436279296875, 2.18305110931396484375, -64.5349578857421875, 9.17784881591796875, -0.16926576197147369384765625, 12.69039154052734375},
         {-10.01922702789306640625, 3.2598330974578857421875, -2.52011966705322265625, 3.17220592498779296875, -70.322662353515625, 4.564808368682861328125, -0.16925294697284698486328125, 10.93472957611083984375},

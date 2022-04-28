@@ -186,7 +186,6 @@ public:
     void forward(dnnl::memory& inputBufferMem) {
 
         using namespace dnnl_wrappers;
-        auto& eng = ctx.dnnl_context.getEngine();
         auto& stm = ctx.dnnl_context.getEngineStream();
 
 #ifdef dynamic_quant
