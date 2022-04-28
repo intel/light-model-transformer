@@ -76,7 +76,8 @@ class PatternReplacer:
         pass
 
     def _add_node_to_graph(self, node: NodeDef):
-        assert(node.name not in [node.name for node in self.__node_collection])
+        if(node.name  in [node.name for node in self.__node_collection]):
+            raise ValueError('node name already in node collection')        
         self.__node_collection.append(node)
 
     def _attach_target_node_inputs(self, recipe: Recipe, node_mapping: Dict[str, str]) -> None:
@@ -131,7 +132,8 @@ class PatternReplacer:
             op_def = self.__default_graph._get_op_def(node.op)
 
             # Ops with multiple output args are not currently supported.
-            assert(len(op_def.output_arg) == 1)
+            if(len(op_def.output_arg) != 1):
+                raise ValueError('Ops with multiple output args are not currently supported')
 
             return f'{node.name}:{op_def.output_arg[0].name}:{output_idx}'
 

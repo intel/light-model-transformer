@@ -145,7 +145,8 @@ class PatternExtractor:
             node_input) for node_input in node.input]
 
         fanin_nodes = [node for node in nodes if node.name in input_node_names]
-        assert(len(input_node_names) == len(fanin_nodes))
+        if (len(input_node_names) != len(fanin_nodes)):
+            raise ValueError('input nodes name length doesnt match fanin node length')
 
         return fanin_nodes
 

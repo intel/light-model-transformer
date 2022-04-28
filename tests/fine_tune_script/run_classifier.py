@@ -455,9 +455,12 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
     input_mask.append(0)
     segment_ids.append(0)
 
-  assert len(input_ids) == max_seq_length
-  assert len(input_mask) == max_seq_length
-  assert len(segment_ids) == max_seq_length
+  if len(input_ids) != max_seq_length:
+    raise ValueError('input id length doesnt match max seq length')
+  if len(input_mask) != max_seq_length:
+    raise ValueError('input mask length doesnt match max seq length')
+  if len(segment_ids) != max_seq_length:
+    raise ValueError('segment id length doesnt match max seq length')
 
   label_id = label_map[example.label]
   if ex_index < 5:
@@ -909,7 +912,8 @@ def main(_):
     # However, if running eval on the TPU, you will need to specify the
     # number of steps.
     if FLAGS.use_tpu:
-      assert len(eval_examples) % FLAGS.eval_batch_size == 0
+      if (len(eval_examples) % FLAGS.eval_batch_size != 0):
+        raise ValueError('number of examples is not divisible by the batch size')
       eval_steps = int(len(eval_examples) // FLAGS.eval_batch_size)
 
     eval_drop_remainder = True if FLAGS.use_tpu else False
@@ -972,7 +976,8 @@ def main(_):
             for class_probability in probabilities) + "\n"
         writer.write(output_line)
         num_written_lines += 1
-    assert num_written_lines == num_actual_predict_examples
+    if num_written_lines != num_actual_predict_examples:
+      raise ValueError('number of written lines doesnt match number of predicted examples')
 
   if FLAGS.do_export:
     name_to_features = {

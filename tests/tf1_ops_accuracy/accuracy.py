@@ -288,9 +288,12 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
     input_mask.append(0)
     segment_ids.append(0)
 
-  assert len(input_ids) == max_seq_length
-  assert len(input_mask) == max_seq_length
-  assert len(segment_ids) == max_seq_length
+  if len(input_ids) != max_seq_length:
+    raise ValueError('input id length doesnt match max seq length')
+  if len(input_mask) != max_seq_length:
+    raise ValueError('input mask length doesnt match max seq length')
+  if len(segment_ids) != max_seq_length:
+    raise ValueError('segment id length doesnt match max seq length')
 
   label_id = label_map[example.label]
   if ex_index < 5:
