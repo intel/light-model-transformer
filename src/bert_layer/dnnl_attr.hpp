@@ -42,6 +42,12 @@ public:
         return *this;
     }
 
+    BuildAttrs& Binary(dnnl::algorithm algo, dnnl::memory::desc memory_desc) {
+        post_ops_.append_binary(algo, memory_desc);
+        empty = false;
+        return *this;
+    }
+
     bool Empty(){
         return empty;
     }

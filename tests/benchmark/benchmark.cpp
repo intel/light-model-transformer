@@ -16,7 +16,7 @@
 #include "bert_type_traits.h"
 
 static const int LAYERS = 12;
-static const int warmupTimes = 10;
+static const int warmupTimes = 0;
 static int benchmarkTimes = 1000;
 
 static const int hiddenSize = 768;
@@ -95,14 +95,16 @@ struct LayerWeights
 // {
 //   using BertContextT = BertContext<InputT, BatchInputT>;
 
+// void benchmarkMB1(int tokenSize, LayerWeights *weights, float *input)
+// {
 template <bool do_quant, bool do_bf16>
-void benchmarkMB1(int tokenSize, LayerWeights *weights, float *input)
+void benchmark(int tokenSize, LayerWeights *weights, float *input, int batch = 1)
 {
   using InputT = typename use_quantization<do_quant>::type;
   using BatchInputT = typename use_bfloat16<do_bf16>::type;
   using BertContextT = BertContext<InputT, BatchInputT>;
 
-  BertContextT ctx;
+  BertContextT ctx(128, hiddenSize, intermediateSize, batch);
   BertLayer<BertContextT> *bert_layers[LAYERS];
   Layer_minmax bert_layers_minmax[12] = {
       {-10.85244083404541015625, 4.14164829254150390625, -1.6212508678436279296875, 2.18305110931396484375, -64.5349578857421875, 9.17784881591796875, -0.16926576197147369384765625, 12.69039154052734375},
@@ -135,8 +137,6 @@ void benchmarkMB1(int tokenSize, LayerWeights *weights, float *input)
                                bert_layers_minmax[i]);
   }
 
-  std::vector<int> inputMask(ctx.maxTokenSize, 1);
-  ctx.setInputMask(inputMask.data());
 
   using duration = std::chrono::steady_clock::duration;
   std::vector<duration> compute_times;
@@ -144,7 +144,7 @@ void benchmarkMB1(int tokenSize, LayerWeights *weights, float *input)
 
   for (int i = 0; i < warmupTimes + benchmarkTimes; ++i)
   {
-    dnnl::memory::dims dims{128, 768};
+    dnnl::memory::dims dims{batch, 128, 768};
     auto buffer = dnnl_wrappers::AttachMemory(ctx.dnnl_context.getEngine(), dims, input, false);
 
     auto start = std::chrono::steady_clock::now();
@@ -161,11 +161,21 @@ void benchmarkMB1(int tokenSize, LayerWeights *weights, float *input)
   }
 
   using namespace std::chrono_literals;
-  auto total_time = std::accumulate(std::begin(compute_times), std::end(compute_times), duration{0ns});
-  auto average_time_ms = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(total_time).count() / compute_times.size();
+
+  auto total_samples = static_cast<double>(compute_times.size() * batch);
+
+  // We want to have time in seconds but keep the fraction part for precision.
+  std::chrono::duration<double, std::ratio<1, 1>> total_time_s = std::accumulate(std::begin(compute_times), std::end(compute_times), duration{0ns});
+
+  // No duration_cast needed for floating point durations.
+  std::chrono::duration<double, std::milli> average_time_ms = total_time_s / total_samples;
+
+  auto throughput_per_s = total_samples / total_time_s.count();
+
 
   std::stringstream ss;
-  ss << std::fixed << std::setprecision(2) << "Average Time: " << average_time_ms << " ms" << std::endl;
+  ss << std::fixed << std::setprecision(2) << "Average Time: " << average_time_ms.count() << " ms" << std::endl;
+  ss << std::fixed << std::setprecision(2) << "Average Throughput: " << throughput_per_s << " samples/s" << std::endl;
   std::cout << ss.str();
 
   for (int i = 0; i < LAYERS; ++i)
@@ -184,11 +194,20 @@ try {
   {
     benchmarkTimes = std::stoi(argv[1]);
   }
-
   if (benchmarkTimes < 1)
   {
     throw std::invalid_argument("Amount of times benchmark is run cannot be less than 1");
   }
+
+  if (argc > 2)
+  {
+    batchSize = std::stoi(argv[2]);
+  }
+  if (batchSize < 1)
+  {
+    throw std::invalid_argument("Batch size cannot be less than 1");
+  }
+
   // Fake input
   std::vector<float> input(batchSize * tokenSize * hiddenSize);
   std::minstd_rand gen; //faster than MT
@@ -196,7 +215,7 @@ try {
   std::generate(input.begin(), input.end(), [&gen, &dist](){ return  dist(gen); });
 
   // Fake weights
-  LayerWeights weights[12];
+  LayerWeights weights[LAYERS];
 
   // Get BertLayer mode from command line args to let CI decide what to run.
   // Defaults to FP32.
@@ -215,22 +234,22 @@ try {
   {
     if (do_bfloat16)
     {
-        benchmarkMB1<true, true>(tokenSize, weights, input.data());
+        benchmark<true, true>(tokenSize, weights, input.data(), batchSize);
     }
     else
     {
-        benchmarkMB1<true, false>(tokenSize, weights, input.data());
+        benchmark<true, false>(tokenSize, weights, input.data(), batchSize);
     }
   }
   else
   {
     if (do_bfloat16)
     {
-        benchmarkMB1<false, true>(tokenSize, weights, input.data());
+        benchmark<false, true>(tokenSize, weights, input.data(), batchSize);
     }
     else
     {
-        benchmarkMB1<false, false>(tokenSize, weights, input.data());
+        benchmark<false, false>(tokenSize, weights, input.data(), batchSize);
     }
   }
 

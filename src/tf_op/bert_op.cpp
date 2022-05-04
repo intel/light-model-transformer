@@ -13,9 +13,11 @@
 
 #include <cstdint>
 #include <iomanip>
+#include <iostream>
 #include <sstream>
 #include <type_traits>
 #include <vector>
+#include <stdexcept>
 
 using namespace tensorflow;
 
@@ -48,7 +50,12 @@ class BertOp : public OpKernel
     using BertContextT = BertContext<InputT, BatchInputT>;
 
 public:
-    explicit BertOp(OpKernelConstruction *context) : OpKernel{context}, ctx{}, layers{0}, hiddenSize{0}, initialized{false}
+    explicit BertOp(OpKernelConstruction* context)
+        : OpKernel{context}
+        , bert_ctx_builder{}
+        , ctx{}
+        , bert_layers{}
+        , initialized{false}
 
     {
         {
@@ -57,19 +64,22 @@ public:
             std::cout << ss.str() << std::endl;
         }
 
-        int num;
-        OP_REQUIRES_OK(context, context->GetAttr("NumWeights", &num));
-        OP_REQUIRES_OK(context, context->GetAttr("HiddenSize", &hiddenSize));
+        int num_weights;
+        OP_REQUIRES_OK(context, context->GetAttr("NumWeights", &num_weights));
+        
+        int hidden_size;
+        OP_REQUIRES_OK(context, context->GetAttr("HiddenSize", &hidden_size));
+
+        int intermediate_size;
+        OP_REQUIRES_OK(context, context->GetAttr("IntermediateSize", &intermediate_size));
 
         // Each layer has 16 weights
-        this->layers = num / 16;
-        this->bert_layers.reserve(this->layers);
+        int layers = num_weights / 16;
 
-        for (int i = 0; i < this->layers; ++i)
-        {
-            auto t = new BertLayer<BertContextT>(ctx);
-            this->bert_layers.push_back(t);
-        }
+        bert_ctx_builder.NumLayers(layers);
+        bert_ctx_builder.HiddenSize(hidden_size);
+        bert_ctx_builder.IntermediateSize(intermediate_size);
+        bert_ctx_builder.MaxTokenSize(max_token_size);
     }
 
     ~BertOp()
@@ -83,61 +93,142 @@ public:
 
     void Compute(OpKernelContext *context) override
     {
-        // Grab the input tensor
-        const Tensor &tensor_embeded = context->input(0);
+        const Tensor &tensor_embedded = context->input(0);
         const Tensor &tensor_masks = context->input(1);
 
-        OP_REQUIRES(context, (tensor_embeded.dims() == 2 || tensor_embeded.dims() == 3),
-                    errors::InvalidArgument("Dims unexpected: dim(input) != 2"));
 
-        // TF2 models provide batched input, first dimension is batch size, required to be 1 for now.
-        if (tensor_embeded.dims() == 3)
+        // Validate tensor dimensions.
+        // The macros won't work properly if they are in a separate function.
         {
-            OP_REQUIRES(context, (tensor_embeded.dim_size(0) == 1),
-                        errors::InvalidArgument("Only batch size of 1 is supported right now."));
+            OP_REQUIRES(context, (tensor_masks.dims() == 3),
+                errors::InvalidArgument("The mask tensor must have 3 dimensions."));
+
+            OP_REQUIRES(context, (tensor_embedded.dims() == 2 || tensor_embedded.dims() == 3),
+                        errors::InvalidArgument("The input tensor must have either 2 or 3 dimensions."));
+
+            if (tensor_embedded.dims() == 2)
+            {
+                OP_REQUIRES(context, (tensor_embedded.dim_size(0) % max_token_size == 0),
+                    errors::InvalidArgument("2D input must be divisible by max_token_size on the first dimension."));
+            }
+
+            // For a 2D tensor: dim_size(1) == ctx->hiddensize,
+            // For 3D tensor: dim_size(2) == ctx->hiddensize
+            int hidden_size_dim_idx = tensor_embedded.dims() - 1;
+            OP_REQUIRES(context, (tensor_embedded.dim_size(hidden_size_dim_idx) == bert_ctx_builder.HiddenSize()),
+                        errors::InvalidArgument("Unexpected hidden size"));
         }
 
-        // Due to the above, for a 2D tensor: dim_size(1) == ctx.hiddensize,
-        // and for 3D tensor dim_size(2) == ctx.hiddensize
-        int hidden_size_dim_idx = tensor_embeded.dims() - 1;
-        OP_REQUIRES(context, (tensor_embeded.dim_size(hidden_size_dim_idx) == ctx.hiddenSize),
-                    errors::InvalidArgument("Unexpected hidden size"));
+        // Initialize the BertContext, BertLayers and weights
+        initializeIfNeeded(context, tensor_embedded, tensor_masks);
 
-
-        float *embeded = (float *)tensor_embeded.tensor_data().data();
-
-        int total_tokens_idx = tensor_embeded.dims() - 2;
-        int total_tokens = tensor_embeded.dim_size(total_tokens_idx); // total_tokens = batch_size * tokens_each_def128
-
-        // Initialize the weights and mode
-        if (!initialized)
+        // Fail if batch size changed.
         {
-            // TODO: protect it
-            initWeights(context);
-            initialized = true;
+            int batch_size = getBatchSize(tensor_embedded);
+            assert(batch_size > 0);
+            OP_REQUIRES(context, batch_size == ctx->batch_, errors::InvalidArgument("Batch size changed unexpectedly."));
+        }
+
+        int total_tokens_idx = tensor_embedded.dims() - 2;
+        int total_tokens;
+        assert(tensor_embedded.dims() == 2 || tensor_embedded.dims() == 3); // Checked by OP_REQUIRES above
+        if(tensor_embedded.dims() == 2)
+        {
+            total_tokens = tensor_embedded.dim_size(total_tokens_idx) / ctx->batch_; // total_tokens = batch_size * tokens_each_def128
+        }
+        else
+        {
+            total_tokens = tensor_embedded.dim_size(total_tokens_idx);
         }
 
         // Create an output tensor
         Tensor *output_tensor = NULL;
         OP_REQUIRES_OK(context, context->allocate_output(
-                                    0, tensor_embeded.shape(),
+                                    0, tensor_embedded.shape(),
                                     &output_tensor));
         float *output = (float *)output_tensor->tensor_data().data();
 
-
         setInputMask(tensor_masks);
-        dnnl::memory::dims dims{total_tokens, hiddenSize};
-        auto pinput = dnnl_wrappers::AttachMemory(ctx.dnnl_context.getEngine(), dims, embeded, false);
-        for (int i = 0; i < this->layers; ++i)
+        
+        float *embedded = (float *)tensor_embedded.tensor_data().data();
+        dnnl::memory::dims dims{ctx->batch_, total_tokens, ctx->hiddenSize};
+        auto pinput = dnnl_wrappers::AttachMemory(ctx->dnnl_context.getEngine(), dims, embedded, false);
+        for (int i = 0; i < ctx->numLayers; ++i)
         {
             this->bert_layers[i]->forward(pinput);
         }
 
         // Copy data to output
-        memcpy(output, embeded, sizeof(float) * hiddenSize * total_tokens);
+        memcpy(output, embedded, sizeof(float) * ctx->hiddenSize * total_tokens * ctx->batch_);
     }
 
 private:
+
+    void initializeIfNeeded(OpKernelContext* context, const Tensor& tensor_embedded, const Tensor& tensor_masks)
+    {
+        // BertContext must be initialized before BertLayers and weights,
+        // so that we can verify the dimensions of the input tensor.
+        // TODO: Reinitialize BertContext, and BertLayers if batch size changes.
+        if (!initialized)
+        {
+            initBertContext(tensor_embedded, tensor_masks);
+            initLayers();
+            initWeights(context);
+            initialized = true;
+        }
+    }
+
+    void initBertContext(const Tensor& tensor_embedded, const Tensor& tensor_masks)
+    {
+        int batch_size = getBatchSize(tensor_embedded);
+        bert_ctx_builder.BatchSize(batch_size);
+
+        ctx = bert_ctx_builder.Build<InputT, BatchInputT>();
+        std::cout << "BertContext initialized: maxTokenSize = " << ctx->maxTokenSize
+                  << ", hiddenSize = " << ctx->hiddenSize << ", intermediateSize = " << ctx->intermediateSize
+                  << ", batch = " << ctx->batch_ << ", numLayers = " << ctx->numLayers << std::endl;
+    }
+
+    /**
+     * @brief Determine the batch size from tensor dimensions.
+     * 
+     * For a 3D tensor, batch size is the first dimension.
+     * For a 2D tensor, the first dimension is assumed to be batch_size*max_token_size
+     * 
+     * @param tensor The tensor, must be 2D or 3D
+     * @return int - The batch size
+     */
+    int getBatchSize(const Tensor& tensor)
+    {
+        // TF2 models can provide batched input, so they have one extra dimension.
+        if (tensor.dims() == 3)
+        {
+            return tensor.dim_size(0);
+        }
+        else if (tensor.dims() == 2)
+        {
+            // OP_REQUIRES in Compute() guarantees that
+            // tensor.dim_size(0) % max_token_size == 0
+            return tensor.dim_size(0) / max_token_size;
+        }
+
+        // Will not happen due to OP_REQUIRES checks in Compute(),
+        // but may be used for paranoid asserts in debug builds.
+        return -1;
+    }
+
+    void initLayers()
+    {
+        bert_layers.reserve(ctx->numLayers);
+
+        for (int i = 0; i < ctx->numLayers; ++i)
+        {
+            auto t = new BertLayer<BertContextT>(*ctx);
+            bert_layers.push_back(t);
+        }
+
+    }
+
     void initWeights(OpKernelContext *context)
     {
         int idx = 2;
@@ -179,31 +270,45 @@ private:
 
     void setInputMask(const Tensor& mask)
     {
-        auto data = mask.tensor_data().data();
         switch(mask.dtype()) {
         case DT_FLOAT:
-            ctx.setInputMask((float*)data);
+            setInputMaskWithType<float>(mask);
             break;
         case DT_DOUBLE:
-            ctx.setInputMask((double*)data);
+            setInputMaskWithType<double>(mask);
             break;
         case DT_INT32:
-            ctx.setInputMask((int32_t*)data);
+            setInputMaskWithType<int32_t>(mask);
             break;
         case DT_INT64:
-            ctx.setInputMask((int64_t*)data);
+            setInputMaskWithType<int64_t>(mask);
             break;
         default:
             throw std::runtime_error("Unsupported mask data type");
         }
     }
 
-private:
-    BertContextT ctx;
-    int layers;
-    int hiddenSize;
-    bool initialized;
+    template <typename T, std::enable_if_t<std::is_arithmetic<T>::value, bool> = true>
+    void setInputMaskWithType(const Tensor& mask) {
+        for(int i = 0; i < ctx->batch_; ++i)
+        {
+            T* data = (T*)mask.tensor_data().data();
+            // Advance the data pointer to the next batch element.
+            // dim_size(1) is can be 1 or maxTokenSize, this logic
+            // should work for both.
+            data += i * mask.dim_size(1) * mask.dim_size(2);
+            
+            ctx->setInputMask(data, i);
+        }
+    }
+
+    static constexpr int max_token_size = 128;
+
+    BertContextBuilder bert_ctx_builder;
+    std::unique_ptr<BertContextT> ctx;
     std::vector<BertLayer<BertContextT> *> bert_layers;
+    bool initialized;
+
 
     Layer_minmax bert_layers_minmax[12] = {
         {-10.85244083404541015625, 4.14164829254150390625, -1.6212508678436279296875, 2.18305110931396484375, -64.5349578857421875, 9.17784881591796875, -0.16926576197147369384765625, 12.69039154052734375},

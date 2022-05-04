@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 import os
+import time
 
 import numpy as np
 
@@ -49,32 +50,44 @@ if __name__ == '__main__':
     print('### Testing the model.')
 
     total_samples = len(validation_dataset['label'])
-
     labels = validation_dataset['label'][:total_samples]
 
-    # Force batch size 1
-    results = []
-    for i in range(total_samples):
-        res = model([
-            validation_dataset['sentence1'][i:i+1],
-            validation_dataset['sentence2'][i:i+1]
-        ])
-        res = np.argmax(res.numpy())
-        results.append(res)
+    # Batch mode - load all samples as a single batch.
+    start = time.time()
+    res = model([
+            validation_dataset['sentence1'][:total_samples],
+            validation_dataset['sentence2'][:total_samples]
+    ])
+    end = time.time()
 
-        if args.verbose:
-            s = f'Testing: {i :>3} / {total_samples : <3}'
-            print(f"{s}{' ' * (os.get_terminal_size().columns - len(s))}",
-                end='\r', flush=True)
+    results = np.argmax(res.numpy(), axis=1)
+    
+    # Non-batch mode - force batch size 1.
+    # start = time.time()
+    # results = []
+    # for i in range(total_samples):
+    #     res = model([
+    #         validation_dataset['sentence1'][i:i+1],
+    #         validation_dataset['sentence2'][i:i+1]
+    #     ])
+    #     res = np.argmax(res.numpy())
+    #     results.append(res)
+
+    #     if args.verbose:
+    #         s = f'Testing: {i :>3} / {total_samples : <3}'
+    #         print(f"{s}{' ' * (os.get_terminal_size().columns - len(s))}",
+    #             end='\r', flush=True)
+    # end = time.time()
 
     if args.verbose:
         print(f"{'Label' : <10} | {'Response' : <10}")
         for i in range(total_samples):
-            print(f'{labels[i] : <10} | {results[i] : <10}')
+            print(f'{labels[i] : <10} | {results[i] : <10}  {res[i,:]}')
 
     correct = np.sum(results == labels)
     accuracy = correct / total_samples
     print(f'Accuracy: {correct} / {total_samples} - {accuracy * 100}%')
+    print(f'Elapsed time: {end - start}')
     
     if args.out_file is not None:
         with open(args.out_file, 'a') as f:

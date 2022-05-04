@@ -22,7 +22,6 @@
 #include <type_traits>
 #include <vector>
 
-
 //#define dynamic_quant
 
 namespace dnnl_wrappers {
@@ -58,8 +57,9 @@ public:
 
     // hiddenSize 768 Hidden layer neurons, number of hidden units
     // intermediateSize 3072 feed-forward/filter size dimension 4*hiddensize 
-    BertLayer(BertContextT &_ctx, int maxTokenSize = 128, int hiddenSize = 768, int intermediateSize = 3072) :
-    ctx(_ctx) {
+    BertLayer(BertContextT &_ctx, int maxTokenSize = 128, int hiddenSize = 768, int intermediateSize = 3072)
+    : ctx{_ctx}
+    , batch_{ctx.batch_} {
         this->maxTokenSize = maxTokenSize;
         this->hiddenSize = hiddenSize;
         this->intermediateSize = intermediateSize;
@@ -140,7 +140,7 @@ public:
         n = hiddenSize;
         const float epsilon = 9.999999960041972e-13;
         const dnnl::normalization_flags flags = dnnl::normalization_flags::use_scale | dnnl::normalization_flags::use_shift;
-        batchNorm_.reset(new LayerNorm(MakeLayerNorm<float>(eng, m, n, epsilon, flags)));
+        batchNorm_.reset(new LayerNorm(MakeLayerNorm<float>(eng, batch_, m, n, epsilon, flags)));
 
         // intermediate weight and bias
         m = maxTokenSize; // A.Rows();
@@ -185,6 +185,11 @@ public:
     // actualTokens: #tokens = maxTokenSize - padded_tokens
     void forward(dnnl::memory& inputBufferMem) {
 
+        assert([&](){
+            auto dims = inputBufferMem.get_desc().dims();
+            return dims.size() == 3 && dims[0] == batch_ && dims[1] == maxTokenSize && dims[2] == hiddenSize;
+        }());
+
         using namespace dnnl_wrappers;
         auto& stm = ctx.dnnl_context.getEngineStream();
 
@@ -208,9 +213,11 @@ public:
         auto batchMatMul1_desc = batchMatMul1ScaleBias_->PrimDesc();
         auto batchMatMul1_QData = DataSource(reLayoutMemory(ctx.query, batchMatMul1_desc.src_desc()));
         auto batchMatMul1_KData = DataSource(reLayoutMemory(ctx.key, batchMatMul1_desc.weights_desc()));
-        auto batchMatMul1_BData = DataSource(ctx.magic_value);
+        auto batchMatMul1_MaskData = DataSource(ctx.input_mask);
 
-        batchMatMul1ScaleBias_->Compute(stm, batchMatMul1_QData, batchMatMul1_KData, batchMatMul1_BData, ctx.qk_resultBuffer);
+        std::unordered_map<int, std::reference_wrapper<DataSource>> post_ops_data = {{0, std::ref(batchMatMul1_MaskData)}};
+        batchMatMul1ScaleBias_->ComputeWithPostOps(stm, batchMatMul1_QData, batchMatMul1_KData, post_ops_data,
+                                                ctx.qk_resultBuffer);
 
         // Softmax
         auto qk_resultData = DataSource(ctx.qk_resultBuffer);
@@ -316,13 +323,13 @@ private:
 
             const auto dst_scale = 1.f / bias_scale;
 
-            const auto weight_mem = CloneMemory(eng, stm, {k, n}, weight);
-            const auto bias_mem = CloneMemory(eng, stm, {1, n}, bias);
+            const auto weight_mem = CloneMemory(eng, stm, {1, k, n}, weight);
+            const auto bias_mem = CloneMemory(eng, stm, {1, 1, n}, bias);
 
             return std::make_tuple(
                     ScaledCachedData(weight_mem, weight_scale),
                     ScaledCachedData(bias_mem, bias_scale),
-                    std::make_unique<MatMul>(MakeMatMul<Src_T, Weight_T, Bias_T, Dst_T>(eng, m, n, k, attrs.Scale(dst_scale)))
+                    std::make_unique<MatMul>(MakeMatMul<Src_T, Weight_T, Bias_T, Dst_T>(eng, batch_, m, n, k, attrs.Scale(dst_scale)))
             );
     }
 
@@ -350,19 +357,22 @@ private:
 
         // B needs to transpose
         // dnnl::memory::format_tag::cab - is not defined
-        const dnnl::memory::dims dnnl_strides__format_tag__cab{k, 1, heads * k};
+        const dnnl::memory::dims dnnl_strides__format_tag__adbc{heads * k * m, k, 1, heads * k};
 
-        const dnnl::memory::desc     src_md{{heads, m, k}, s_dt, dnnl::memory::format_tag::bac};
-        const dnnl::memory::desc weights_md{{heads, k, n}, w_dt, dnnl_strides__format_tag__cab};
-        const dnnl::memory::desc    bias_md{{    1, 1, n}, b_dt, dnnl::memory::format_tag::abc};
-        const dnnl::memory::desc     dst_md{{heads, m, n}, d_dt, dnnl::memory::format_tag::abc};
-
+        const dnnl::memory::desc     src_md{{batch_, heads, m, k}, s_dt, dnnl::memory::format_tag::acbd};
+        const dnnl::memory::desc weights_md{{batch_, heads, k, n}, w_dt, dnnl_strides__format_tag__adbc};
+        const dnnl::memory::desc    bias_md{};
+        const dnnl::memory::desc     dst_md{{batch_, heads, m, n}, d_dt, dnnl::memory::format_tag::abcd};
+        
         const float scale = 0.125f;
 
         return std::make_unique<dnnl_wrappers::MatMul>(
                     ctx.dnnl_context.getEngine(),
                     src_md, weights_md, bias_md, dst_md,
-                    dnnl_wrappers::BuildAttrs().Scale(scale));
+                    dnnl_wrappers::BuildAttrs()
+                        .Scale(scale)
+                        .Binary(dnnl::algorithm::binary_add, ctx.input_mask.get_desc())
+                        );
     }
 
     std::unique_ptr<dnnl_wrappers::MatMul> BuildBatchMatMul2() {
@@ -375,9 +385,9 @@ private:
         const auto w_dt = DnnlDataType<batch_input_t>::value;
         const auto d_dt = DnnlDataType<float>::value;
 
-        const dnnl::memory::desc     src_md{{heads, m, k}, s_dt, dnnl::memory::format_tag::abc};
-        const dnnl::memory::desc weights_md{{heads, k, n}, w_dt, dnnl::memory::format_tag::bac};
-        const dnnl::memory::desc     dst_md{{heads, m, n}, d_dt, dnnl::memory::format_tag::bac};
+        const dnnl::memory::desc     src_md{{batch_, heads, m, k}, s_dt, dnnl::memory::format_tag::abcd};
+        const dnnl::memory::desc weights_md{{batch_, heads, k, n}, w_dt, dnnl::memory::format_tag::acbd};
+        const dnnl::memory::desc     dst_md{{batch_, heads, m, n}, d_dt, dnnl::memory::format_tag::acbd};
 
         return std::make_unique<dnnl_wrappers::MatMul>(
                         ctx.dnnl_context.getEngine(),
@@ -390,6 +400,7 @@ private:
     int maxTokenSize;
     int hiddenSize;
     int intermediateSize;
+    int batch_;
 
     // Separate query, key, value weight, bias and MatMul op
     dnnl_wrappers::CachedDataSource queryWeight;

@@ -15,6 +15,8 @@
 
 #define QUANT_INT8
 
+// TODO: (kchutkie) refactor these into runtime arguments.
+// Maybe pack all ctor arguments into a struct?
 template <class InputT = float, class BatchInputT = float,
     class = std::enable_if_t<
         std::is_arithmetic<InputT>::value &&
@@ -34,37 +36,78 @@ public:
     // TODO(rfsaliev) review correlation with the 'NumAttentionHeads' attribute
     static constexpr int head_size = 64;
 
-    BertContext(int maxTokenSize = 128, int hiddenSize = 768, int intermediateSize = 3072)
+    BertContext(int maxTokenSize = 128, int hiddenSize = 768, int intermediateSize = 3072, int batch = 1, int numLayers = 12)
         : maxTokenSize{maxTokenSize}
         , hiddenSize{hiddenSize}
         , intermediateSize{intermediateSize}
-        , query{dnnl::memory::desc{{maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
-        , key  {dnnl::memory::desc{{maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
-        , value{dnnl::memory::desc{{maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
-        , resultBuffer1{dnnl::memory::desc{{maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
-        , intermediateBuffer{dnnl::memory::desc{{maxTokenSize, intermediateSize}, DnnlDataType<input_t>::value, dims{}}, dnnl_context.getEngine()}
-        , qk_resultBuffer{dnnl::memory::desc{{hiddenSize / head_size, maxTokenSize, maxTokenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
-        , magic_value{dnnl::memory::desc{{1,1,maxTokenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
+        , batch_{batch}
+        , numLayers{numLayers}
+        , numHeads{hiddenSize / head_size}
+        , query{dnnl::memory::desc{{batch, maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
+        , key  {dnnl::memory::desc{{batch, maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
+        , value{dnnl::memory::desc{{batch, maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
+        , resultBuffer1{dnnl::memory::desc{{batch, maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
+        , intermediateBuffer{dnnl::memory::desc{{batch, maxTokenSize, intermediateSize}, DnnlDataType<input_t>::value, dims{}}, dnnl_context.getEngine()}
+        , qk_resultBuffer{dnnl::memory::desc{{batch, hiddenSize / head_size, maxTokenSize, maxTokenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
+        , input_mask{dnnl::memory::desc{{batch, 1, 1, maxTokenSize}, dt::f32, dims{}}, dnnl_context.getEngine()} // Broadcast dimensions M and N
     {
         assert(hiddenSize % head_size == 0);
     }
 
-    // Set input mask
     template <typename T>
-    void setInputMask(const T *input_mask)
+    void setInputMask(const T *mask)
     {
         // TODO(rfsaliev) utilize dnnl::eltwise(linear) instead
-        MemoryAccessor<float> magic_value_acc(magic_value);
-        assert(magic_value.get_desc().get_size() >= maxTokenSize * sizeof(float));
-        for (int i = 0; i < maxTokenSize; ++i)
+        auto desc = input_mask.get_desc();
+        auto dims = desc.dims();
+        int numElements = dims[3] * dims[2] * dims[1] * dims[0];
+        MemoryAccessor<float> input_mask_acc(input_mask);
+        assert(input_mask.get_desc().get_size() >= numElements * sizeof(float));
+        for (int i = 0; i < numElements; ++i)
         {
-            magic_value_acc.Data()[i] = -10000.0f * (1 - input_mask[i]);
+            input_mask_acc.Data()[i] = -10000.f * (1.f - mask[i]);
         }
+    }
+
+    /**
+     * @brief Set the input mask for a specific batch element
+     * 
+     * @tparam T Type of the raw data pointer
+     * @param input_mask Pointer to the raw data containing the input mask
+     * @param batch Which element of the batch to set
+     */
+    template <typename T>
+    void setInputMask(const T* mask, int batch)
+    {
+        auto desc = input_mask.get_desc();
+        auto dims = desc.dims();
+        int n_stride = 1;
+        int m_stride = dims[3];
+        int head_stride = m_stride * dims[2];
+        int batch_stride = head_stride * dims[1];
+        int num_elements = batch_stride * dims[0];
+        assert(input_mask.get_desc().get_size() >= num_elements * sizeof(float));
+        MemoryAccessor<float> input_mask_acc(input_mask);
+        for (int h = 0; h < dims[1]; ++h)
+        {
+            for (int m = 0; m < dims[2]; ++m)
+            {
+                for (int n = 0; n < dims[3]; ++n)
+                {
+                    input_mask_acc.Data()[batch * batch_stride + h * head_stride + m * m_stride + n] = -10000.f * (1.f - mask[n]);
+                }
+            }
+
+        }
+
     }
 
     int maxTokenSize;
     int hiddenSize;
     int intermediateSize;
+    int batch_;
+    int numLayers;
+    int numHeads;
     DnnlCommon dnnl_context;
 
     // Store the result of input*qkvWeight
@@ -79,7 +122,45 @@ public:
     dnnl::memory qk_resultBuffer;
 
     // Magic value: 0 or -10000
-    dnnl::memory magic_value;
+    dnnl::memory input_mask;
+};
+
+
+
+// Helper class to build a BertContext.
+// In TF op we get some of the context arguments
+// later than others, so we need a way to store them. 
+// Also makes the arguments of the BertContext ctor more
+// manageable.
+class BertContextBuilder {
+public:
+    template <class InputT, class BatchInputT>
+    std::unique_ptr<BertContext<InputT, BatchInputT>> Build() {
+        return std::make_unique<BertContext<InputT, BatchInputT>>(max_token_size, hidden_size, intermediate_size,
+                                                                  batch_size, num_layers);
+    }
+
+    void MaxTokenSize(int max_token_size) { this->max_token_size = max_token_size; }
+    void HiddenSize(int hidden_size) { this->hidden_size = hidden_size; }
+    void IntermediateSize(int intermediate_size) { this->intermediate_size = intermediate_size; }
+    void BatchSize(int batch_size) { this->batch_size = batch_size; }
+    void NumLayers(int num_layers) { this->num_layers = num_layers; }
+    // void NumAttentionHeads (int num_attention_heads) { this->num_attention_heads = num_attention_heads; }
+
+    int MaxTokenSize() const { return this->max_token_size; }
+    int HiddenSize() const { return this->hidden_size; }
+    int IntermediateSize() const { return this->intermediate_size; }
+    int BatchSize() const { return this->batch_size; }
+    int NumLayers() const { return this->num_layers; }
+
+private:
+    int max_token_size = 128;
+    int hidden_size = 768;
+    int intermediate_size = 3072;
+    int batch_size = 1;
+    int num_layers = 12;
+    // Unused as of now, will be needed e.g. for BERT-Large
+    // int num_attention_heads = 12;
 };
 
 #endif

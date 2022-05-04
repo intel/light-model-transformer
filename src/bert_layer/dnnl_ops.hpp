@@ -43,6 +43,46 @@ public:
         stm.wait();
     }
 
+    void ComputeWithPostOps(dnnl::stream& stm, DataSource& src, DataSource& weights,
+                            std::unordered_map<int, std::reference_wrapper<DataSource>>& post_op_data,
+                            dnnl::memory& dst_memory) {
+        const auto prim_desc = PrimDesc();
+        assert(prim_desc.dst_desc() == dst_memory.get_desc());
+
+        auto src_memory = src.GetData(stm, prim_desc.src_desc());
+        auto weights_memory = weights.GetData(stm, prim_desc.weights_desc());
+
+        std::unordered_map<int, dnnl::memory> args = {
+            {DNNL_ARG_SRC, src_memory},
+            {DNNL_ARG_WEIGHTS, weights_memory},
+            {DNNL_ARG_DST, dst_memory}
+        };
+
+        // (krzychut)
+        // Due to https://github.com/oneapi-src/oneDNN/issues/1337,
+        // we have to get the attrs and post_ops in separate lines to ensure
+        // proper lifetime of the attr object.
+        auto attr = prim_desc.get_primitive_attr();
+        auto post_ops = attr.get_post_ops();
+        // Do NOT chain get_primitive_attr().get_post_ops() like this until the above issue is fixed:
+        // auto post_ops = prim_desc.get_primitive_attr().get_post_ops(); 
+
+        for(auto& item : post_op_data)
+        {
+            auto idx = item.first;
+            auto& data_source = item.second.get();
+            dnnl::algorithm alg;
+            dnnl::memory::desc desc;
+            post_ops.get_params_binary(idx, alg, desc);
+            auto data = data_source.GetData(stm, desc);
+            args.emplace(DNNL_ARG_ATTR_MULTIPLE_POST_OP(idx) | DNNL_ARG_SRC_1, data);
+        }
+
+        prim_.execute(stm, args);
+        // FIXME(rfsaliev) have to wait due to lifetime of x_memory variables
+        stm.wait();
+    }
+
     dnnl::matmul::primitive_desc PrimDesc() const {
         auto c_desc = prim_.get_primitive_desc();
         return dnnl::matmul::primitive_desc{const_cast<dnnl_primitive_desc_t>(c_desc)};
@@ -57,11 +97,11 @@ private:
 };
 
 struct MatMulDims {
-    MatMulDims(int m, int n, int k, bool bias_2d = false)
-        : src_tz{m, k}
-        , weights_tz{k, n}
-        , bias_tz{bias_2d ? m : 1, n}
-        , dst_tz{m, n} {}
+    MatMulDims(int batch, int m, int n, int k, bool bias_2d = false)
+        : src_tz{batch, m, k}
+        , weights_tz{1, k, n}
+        , bias_tz{1, bias_2d ? m : 1, n}
+        , dst_tz{batch, m, n} {}
 
     dnnl::memory::dims src_tz;
     dnnl::memory::dims weights_tz;
@@ -69,33 +109,32 @@ struct MatMulDims {
     dnnl::memory::dims dst_tz;
 };
 
-inline MatMul MakeMatMul(const dnnl::engine& eng, int m, int n, int k, 
+inline MatMul MakeMatMul(const dnnl::engine& eng, int batch, int m, int n, int k, 
                         dnnl::memory::data_type src_dt, dnnl::memory::data_type weights_dt,
                         dnnl::memory::data_type bias_dt, dnnl::memory::data_type dst_dt,
                         const dnnl::primitive_attr& attr = {}) {
 
-    const MatMulDims dims{m, n, k};
+    const MatMulDims dims{batch, m, n, k};
 
-    const auto src_fmt = dnnl::memory::format_tag::ab;
-    const auto bias_fmt = dnnl::memory::format_tag::ab;
-    const auto dst_fmt =  dnnl::memory::format_tag::ab;
-    const auto weights_fmt = dnnl::memory::format_tag::any;
+    // plain memory format can be defined using empty strides argument
+    dnnl::memory::dims plain{};
+    using fmt = dnnl::memory::format_tag;
 
-    const auto src_md     = dnnl::memory::desc(dims.src_tz , src_dt, src_fmt);
-    const auto weights_md = dnnl::memory::desc(dims.weights_tz, weights_dt, weights_fmt);
-    const auto bias_md    = dnnl::memory::desc(dims.bias_tz, bias_dt, bias_fmt);
-    const auto dst_md     = dnnl::memory::desc(dims.dst_tz, dst_dt, dst_fmt);
+    const auto src_md     = dnnl::memory::desc(dims.src_tz , src_dt, plain);
+    const auto weights_md = dnnl::memory::desc(dims.weights_tz, weights_dt, fmt::any);
+    const auto bias_md    = dnnl::memory::desc(dims.bias_tz, bias_dt, plain);
+    const auto dst_md     = dnnl::memory::desc(dims.dst_tz, dst_dt, plain);
 
     return MatMul{eng, src_md, weights_md, bias_md, dst_md, attr};
 }
 
 template <typename T_src, typename T_wei, typename T_bias, typename T_dst>
-MatMul MakeMatMul(const dnnl::engine& eng, int m, int n, int k, const dnnl::primitive_attr& attr = {}) {
+MatMul MakeMatMul(const dnnl::engine& eng, int batch, int m, int n, int k, const dnnl::primitive_attr& attr = {}) {
     const auto src_dt = DnnlDataType<T_src>::value;
     const auto weights_dt = DnnlDataType<T_wei>::value;
     const auto bias_dt = DnnlDataType<T_bias>::value;
     const auto dst_dt = DnnlDataType<T_dst>::value;
-    return MakeMatMul(eng, m, n, k, src_dt, weights_dt, bias_dt, dst_dt, attr);
+    return MakeMatMul(eng, batch, m, n, k, src_dt, weights_dt, bias_dt, dst_dt, attr);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -139,22 +178,20 @@ private:
     dnnl::primitive prim_;
 };
 
-inline SoftMax MakeSoftmax(const dnnl::engine& eng, int m, int n,
+inline SoftMax MakeSoftmax(const dnnl::engine& eng, int batch, int m, int n,
                           dnnl::memory::data_type src_dt, int axis,
                           const dnnl::primitive_attr& attr = {}) {
-    const dnnl::memory::dims data_tz = { m, n };
+    const dnnl::memory::dims data_tz = {batch, m, n};
 
-    const auto data_format = dnnl::memory::format_tag::ab;
-
-    const auto data_md = dnnl::memory::desc({ data_tz }, src_dt, data_format);
+    const auto data_md = dnnl::memory::desc(data_tz, src_dt, dnnl::memory::dims{});
 
     return SoftMax{eng, data_md, axis, attr};
 }
 
 template <typename T_data>
-SoftMax MakeSoftmax(const dnnl::engine& eng, int m, int n, int axis, const dnnl::primitive_attr& attr = {}) {
+SoftMax MakeSoftmax(const dnnl::engine& eng, int batch, int m, int n, int axis, const dnnl::primitive_attr& attr = {}) {
     const auto data_dt = DnnlDataType<T_data>::value;
-    return MakeSoftmax(eng, m, n, data_dt, axis, attr);
+    return MakeSoftmax(eng, batch, m, n, data_dt, axis, attr);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -179,7 +216,7 @@ public:
         const auto src_md = prim_desc.src_desc();
         auto src_memory = src.GetData(stm, src_md);
 
-        const auto scaleshift_md = dnnl::memory::desc{{1, src_md.dims().at(1)}, src_md.data_type(), dnnl::memory::dims{}};
+        const auto scaleshift_md = dnnl::memory::desc{{1, src_md.dims().back()}, src_md.data_type(), dnnl::memory::dims{}};
         auto scale_memory = scale.GetData(stm, scaleshift_md);
         auto shift_memory = shift.GetData(stm, scaleshift_md);
 
@@ -205,25 +242,23 @@ private:
     dnnl::primitive prim_;
 };
 
-inline LayerNorm MakeLayerNorm(const dnnl::engine& eng, int m, int n,
+inline LayerNorm MakeLayerNorm(const dnnl::engine& eng, int batch, int m, int n,
                         dnnl::memory::data_type data_dt, float epsilon,
                         dnnl::normalization_flags flags = dnnl::normalization_flags::use_scale | dnnl::normalization_flags::use_shift,
                         const dnnl::primitive_attr& attr = {}) {
-    const dnnl::memory::dims data_tz = { m, n };
+    const dnnl::memory::dims data_tz = {batch, m, n};
 
-    const auto data_fmt = dnnl::memory::format_tag::ab;
-
-    const auto data_md     = dnnl::memory::desc({ data_tz }, data_dt, data_fmt);
+    const auto data_md     = dnnl::memory::desc(data_tz, data_dt, dnnl::memory::dims{});
 
     return LayerNorm{eng, data_md, epsilon, flags, attr};
 }
 
 template <typename T_data>
-LayerNorm MakeLayerNorm(const dnnl::engine& eng, int m, int n, float epsilon,
+LayerNorm MakeLayerNorm(const dnnl::engine& eng, int batch, int m, int n, float epsilon,
                  dnnl::normalization_flags flags = dnnl::normalization_flags::use_scale | dnnl::normalization_flags::use_shift,
                  const dnnl::primitive_attr& attr = {}) {
     const auto data_dt = DnnlDataType<T_data>::value;
-    return MakeLayerNorm(eng, m, n, data_dt, epsilon, flags, attr);
+    return MakeLayerNorm(eng, batch, m, n, data_dt, epsilon, flags, attr);
 }
 
 } // namespace dnnl_wrappers
