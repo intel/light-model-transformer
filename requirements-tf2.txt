@@ -3,5 +3,5 @@ pandas
 tensorflow-text
 tensorflow-datasets
 tensorflow-hub
-tf-models-official==2.4.0
+tf-models-official
 pytest

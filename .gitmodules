@@ -1,3 +1,4 @@
 [submodule "model_zoo"]
 	path = model_zoo
 	url = https://github.com/IntelAI/models.git
+	branch = r2.7
