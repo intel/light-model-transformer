@@ -302,10 +302,10 @@ private:
     // Fake method just to test above templates
     void computeQScaleTest() {
         using namespace dnnl_wrappers;
-        static_assert(computeQuantizationScale<float>(0.f, 254.f) == BuildAttrs::noScale);
-        static_assert(computeQuantizationScale<bfloat16>(0.f, 254.f) == BuildAttrs::noScale);
-        static_assert(computeQuantizationScale<int8_t>(0.f, 254.f) == .5f);
-        static_assert(computeQuantizationScale<uint16_t>(0.f, 254.f) == BuildAttrs::noScale);
+        static_assert(computeQuantizationScale<float>(0.f, 254.f) == BuildAttrs::noScale, "");
+        static_assert(computeQuantizationScale<bfloat16>(0.f, 254.f) == BuildAttrs::noScale, "");
+        static_assert(computeQuantizationScale<int8_t>(0.f, 254.f) == .5f, "");
+        static_assert(computeQuantizationScale<uint16_t>(0.f, 254.f) == BuildAttrs::noScale, "");
     }
 
     template <class Src_T = input_t, class Weight_T = Src_T, class Bias_T = float, class Dst_T = float>
@@ -352,7 +352,6 @@ private:
 
         const auto s_dt = DnnlDataType<batch_input_t>::value;
         const auto w_dt = DnnlDataType<batch_input_t>::value;
-        const auto b_dt = DnnlDataType<float>::value;
         const auto d_dt = DnnlDataType<float>::value;
 
         // B needs to transpose

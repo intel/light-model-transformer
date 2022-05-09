@@ -81,12 +81,10 @@ public:
     {
         auto desc = input_mask.get_desc();
         auto dims = desc.dims();
-        int n_stride = 1;
         int m_stride = dims[3];
         int head_stride = m_stride * dims[2];
         int batch_stride = head_stride * dims[1];
-        int num_elements = batch_stride * dims[0];
-        assert(input_mask.get_desc().get_size() >= num_elements * sizeof(float));
+        assert(input_mask.get_desc().get_size() >= (batch_stride * dims[0]) * sizeof(float));
         MemoryAccessor<float> input_mask_acc(input_mask);
         for (int h = 0; h < dims[1]; ++h)
         {

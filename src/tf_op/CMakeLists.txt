@@ -18,7 +18,12 @@ execute_process(COMMAND ${Python3_EXECUTABLE} -c "import tensorflow; print(tenso
 execute_process(COMMAND ${Python3_EXECUTABLE} -c "import tensorflow as tf; print(' '.join(tf.sysconfig.get_link_flags()), end='')"    OUTPUT_VARIABLE TF_LFLAGS)
 execute_process(COMMAND ${Python3_EXECUTABLE} -c "import tensorflow as tf; print(' '.join(tf.sysconfig.get_compile_flags()), end='')" OUTPUT_VARIABLE TF_CFLAGS)
 
-set(CMAKE_CXX_FLAGS "-std=c++14 -liomp5 -Wall -Wextra -Wno-comment ${TF_CFLAGS} ${CMAKE_CXX_FLAGS}")
+set(CMAKE_CXX_FLAGS "-std=c++14 -liomp5 -Wall -Wextra -Werror -Wno-unused-command-line-argument ${TF_CFLAGS} ${CMAKE_CXX_FLAGS}")
+if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
+  set(CMAKE_CXX_FLAGS "-Wno-comment ${CMAKE_CXX_FLAGS}")
+elseif ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Intel")
+  set(CMAKE_CXX_FLAGS "-wd2196 ${CMAKE_CXX_FLAGS}")
+endif()
 set(CMAKE_SHARED_LINKER_FLAGS "-Wl,--no-as-needed ${TF_LFLAGS} ${CMAKE_SHARED_LINKER_FLAGS}")
 include_directories(SYSTEM ${TF_INCLUDE})
 
