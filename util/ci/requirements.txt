@@ -1,0 +1,3 @@
+pandas
+BeautifulSoup4
+matplotlib
