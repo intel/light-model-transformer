@@ -21,6 +21,7 @@ execute_process(COMMAND ${Python3_EXECUTABLE} -c "import tensorflow as tf; print
 set(CMAKE_CXX_FLAGS "-std=c++14 -liomp5 -Wall -Wextra -Werror -Wno-unused-command-line-argument ${TF_CFLAGS} ${CMAKE_CXX_FLAGS}")
 if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
   set(CMAKE_CXX_FLAGS "-Wno-comment ${CMAKE_CXX_FLAGS}")
+# this does not differentiate between icpc and icpx
 elseif ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Intel")
   set(CMAKE_CXX_FLAGS "-wd2196 ${CMAKE_CXX_FLAGS}")
 endif()
