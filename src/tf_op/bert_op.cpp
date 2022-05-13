@@ -82,15 +82,6 @@ public:
         bert_ctx_builder.MaxTokenSize(max_token_size);
     }
 
-    ~BertOp()
-    {
-        for (size_t i = 0; i < this->bert_layers.size(); ++i)
-        {
-            delete this->bert_layers[i];
-        }
-        this->bert_layers.clear();
-    }
-
     void Compute(OpKernelContext *context) override
     {
         const Tensor &tensor_embedded = context->input(0);
@@ -146,20 +137,20 @@ public:
         OP_REQUIRES_OK(context, context->allocate_output(
                                     0, tensor_embedded.shape(),
                                     &output_tensor));
-        float *output = (float *)output_tensor->tensor_data().data();
 
         setInputMask(tensor_masks);
         
         float *embedded = (float *)tensor_embedded.tensor_data().data();
         dnnl::memory::dims dims{ctx->batch_, total_tokens, ctx->hiddenSize};
         auto pinput = dnnl_wrappers::AttachMemory(ctx->dnnl_context.getEngine(), dims, embedded, false);
-        for (int i = 0; i < ctx->numLayers; ++i)
+        for (const auto& bert_layer : this->bert_layers)
         {
-            this->bert_layers[i]->forward(pinput);
+            bert_layer->forward(pinput);
         }
 
         // Copy data to output
-        memcpy(output, embedded, sizeof(float) * ctx->hiddenSize * total_tokens * ctx->batch_);
+        OP_REQUIRES(context, output_tensor->CopyFrom(tensor_embedded, tensor_embedded.shape()),
+                                                        errors::InvalidArgument("Tensors size don't match."));
     }
 
 private:
@@ -223,8 +214,7 @@ private:
 
         for (int i = 0; i < ctx->numLayers; ++i)
         {
-            auto t = new BertLayer<BertContextT>(*ctx);
-            bert_layers.push_back(t);
+            bert_layers.emplace_back(std::make_unique<BertLayer<BertContextT>>(*ctx));
         }
 
     }
@@ -264,7 +254,7 @@ private:
                                              intermediateW, intermediateB,
                                              outputW, outputB,
                                              gamma2, beta2,
-                                             bert_layers_minmax[i]);
+                                             bert_layers_minmax.at(i));
         }
     }
 
@@ -306,11 +296,10 @@ private:
 
     BertContextBuilder bert_ctx_builder;
     std::unique_ptr<BertContextT> ctx;
-    std::vector<BertLayer<BertContextT> *> bert_layers;
+    std::vector<std::unique_ptr<BertLayer<BertContextT>>> bert_layers;
     bool initialized;
 
-
-    Layer_minmax bert_layers_minmax[12] = {
+    std::vector<Layer_minmax> bert_layers_minmax = {
         {{-10.85244083404541015625, 4.14164829254150390625}, {-1.6212508678436279296875, 2.18305110931396484375}, {-64.5349578857421875, 9.17784881591796875}, {-0.16926576197147369384765625, 12.69039154052734375}},
         {{-10.01922702789306640625, 3.2598330974578857421875}, {-2.52011966705322265625, 3.17220592498779296875}, {-70.322662353515625, 4.564808368682861328125}, {-0.16925294697284698486328125, 10.93472957611083984375}},
         {{-11.37454319000244140625, 4.04611110687255859375}, {-2.5044767856597900390625, 3.4310567378997802734375}, {-56.21540069580078125, 5.208764553070068359375}, {-0.16948534548282623291015625, 72.20577239990234375}},

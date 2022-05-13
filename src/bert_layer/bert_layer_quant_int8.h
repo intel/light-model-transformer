@@ -140,7 +140,7 @@ public:
         n = hiddenSize;
         const float epsilon = 9.999999960041972e-13;
         const dnnl::normalization_flags flags = dnnl::normalization_flags::use_scale | dnnl::normalization_flags::use_shift;
-        batchNorm_.reset(new LayerNorm(MakeLayerNorm<float>(eng, batch_, m, n, epsilon, flags)));
+        batchNorm_ = std::make_unique<LayerNorm>(MakeLayerNorm<float>(eng, batch_, m, n, epsilon, flags));
 
         // intermediate weight and bias
         m = maxTokenSize; // A.Rows();
