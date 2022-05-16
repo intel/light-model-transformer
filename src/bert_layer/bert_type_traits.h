@@ -1,3 +1,7 @@
+// Copyright (C) 2021-2022 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+//
+
 #ifndef LIBRARIES_AI_PERFORMANCE_MODELS_BERT_BERT_TYPE_TRAITS_H
 #define LIBRARIES_AI_PERFORMANCE_MODELS_BERT_BERT_TYPE_TRAITS_H
 

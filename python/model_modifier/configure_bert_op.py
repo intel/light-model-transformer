@@ -1,5 +1,9 @@
 #!/usr/bin/env python
 
+# Copyright (C) 2021-2022 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+#
+
 from tensorflow.core.framework.graph_pb2 import GraphDef
 from tensorflow.core.framework.node_def_pb2 import NodeDef
 from tensorflow.core.protobuf.saved_model_pb2 import SavedModel

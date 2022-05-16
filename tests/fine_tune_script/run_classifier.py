@@ -1,3 +1,6 @@
+# Copyright (C) 2021-2022 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+#
 # coding=utf-8
 # Copyright 2018 The Google AI Language Team Authors.
 #
