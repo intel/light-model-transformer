@@ -35,6 +35,7 @@ public:
     // * Large: hiddenSize = 1024, heads = 16
     // TODO(rfsaliev) review correlation with the 'NumAttentionHeads' attribute
     static constexpr int head_size = 64;
+    static constexpr int tensors_per_layer = 16;
 
     BertContext(int maxTokenSize = 128, int hiddenSize = 768, int intermediateSize = 3072, int batch = 1, int numLayers = 12)
         : maxTokenSize{maxTokenSize}
@@ -143,13 +144,14 @@ public:
     void IntermediateSize(int intermediate_size) { this->intermediate_size = intermediate_size; }
     void BatchSize(int batch_size) { this->batch_size = batch_size; }
     void NumLayers(int num_layers) { this->num_layers = num_layers; }
-    // void NumAttentionHeads (int num_attention_heads) { this->num_attention_heads = num_attention_heads; }
+    void NumAttentionHeads (int num_attention_heads) { this->num_attention_heads = num_attention_heads; }
 
     int MaxTokenSize() const { return this->max_token_size; }
     int HiddenSize() const { return this->hidden_size; }
     int IntermediateSize() const { return this->intermediate_size; }
     int BatchSize() const { return this->batch_size; }
     int NumLayers() const { return this->num_layers; }
+    int NumAttentionHeads() const { return this->num_attention_heads; }
 
 private:
     int max_token_size = 128;
@@ -157,8 +159,7 @@ private:
     int intermediate_size = 3072;
     int batch_size = 1;
     int num_layers = 12;
-    // Unused as of now, will be needed e.g. for BERT-Large
-    // int num_attention_heads = 12;
+    int num_attention_heads = 12;
 };
 
 #endif

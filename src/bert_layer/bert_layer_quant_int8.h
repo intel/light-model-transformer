@@ -12,6 +12,8 @@
 #include "dnnl_ops.hpp"
 #include "bert_type_traits.h"
 
+#include "dnnl.hpp"
+
 #include <algorithm>
 #include <cstring>
 #include <cmath>

@@ -5,11 +5,15 @@
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/shape_inference.h"
 #include "tensorflow/core/framework/op_kernel.h"
+#include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/types.pb.h"
 
 #include "bert_layer_quant_int8.h"
 #include "bert_type_traits.h"
 #include "dnnl_common.h"
+#include "tensor_adapter.h"
+
+#include "dnnl.hpp"
 
 #include <cstdint>
 #include <iomanip>
@@ -35,7 +39,7 @@ REGISTER_OP("Bert")
     .Attr("HiddenSize: int = 768")
     .Attr("NumAttentionHeads: int = 12")
     .Attr("IntermediateSize: int = 3072")
-    .Attr("HiddenAct: string = 'gelu_tanh'");
+    .Attr("HiddenAct: {'gelu_tanh'} = 'gelu_tanh'");
 
 #define likely(x) __builtin_expect((x), 1)
 #define unlikely(x) __builtin_expect((x), 0)
@@ -55,37 +59,59 @@ public:
         , bert_ctx_builder{}
         , ctx{}
         , bert_layers{}
+        , tensor_adapter{}
         , initialized{false}
 
     {
-        {
-            std::stringstream ss;
-            ss << std::boolalpha << "BertOp<" << UseQuantization << ", " << UseBFloat16 << "> constructed.";
-            std::cout << ss.str() << std::endl;
-        }
-
         int num_weights;
         OP_REQUIRES_OK(context, context->GetAttr("NumWeights", &num_weights));
         
+        OP_REQUIRES(context, num_weights % BertContextT::tensors_per_layer == 0,
+            errors::InvalidArgument("NumWeights must be a multiple of BertLayer::weights_per_layer"));
+
         int hidden_size;
         OP_REQUIRES_OK(context, context->GetAttr("HiddenSize", &hidden_size));
 
         int intermediate_size;
         OP_REQUIRES_OK(context, context->GetAttr("IntermediateSize", &intermediate_size));
 
-        // Each layer has 16 weights
-        int layers = num_weights / 16;
+        int num_attention_heads;
+        OP_REQUIRES_OK(context, context->GetAttr("NumAttentionHeads", &num_attention_heads));
+
+        OP_REQUIRES(context, num_attention_heads * BertContextT::head_size == hidden_size,
+            errors::InvalidArgument("Constraint not met: HiddenSize = NumAttentionHead * HeadSize"));
+
+        int layers = num_weights / BertContextT::tensors_per_layer;
+
+        OP_REQUIRES(context, layers == 12, errors::InvalidArgument("Currently only BERT-base with 12 layers is supported."));
 
         bert_ctx_builder.NumLayers(layers);
         bert_ctx_builder.HiddenSize(hidden_size);
         bert_ctx_builder.IntermediateSize(intermediate_size);
         bert_ctx_builder.MaxTokenSize(max_token_size);
+        bert_ctx_builder.NumAttentionHeads(num_attention_heads);
+
+
+        {
+            std::stringstream ss;
+            ss << std::boolalpha << "BertOp<" << UseQuantization << ", " << UseBFloat16 << "> constructed.";
+            std::cout << ss.str() << std::endl;
+        }
     }
 
     void Compute(OpKernelContext *context) override
     {
         const Tensor &tensor_embedded = context->input(0);
         const Tensor &tensor_masks = context->input(1);
+
+        {
+            int batch_size = getBatchSize(tensor_embedded);
+            OP_REQUIRES(context, batch_size > 0, errors::InvalidArgument("Failed to get batch size."));
+            bert_ctx_builder.BatchSize(batch_size);
+            tensor_adapter.Init(batch_size, bert_ctx_builder.MaxTokenSize(), bert_ctx_builder.HiddenSize(),
+                                bert_ctx_builder.NumAttentionHeads(), bert_ctx_builder.IntermediateSize());
+        }
+
 
 
         // Validate tensor dimensions.
@@ -111,7 +137,10 @@ public:
         }
 
         // Initialize the BertContext, BertLayers and weights
-        initializeIfNeeded(context, tensor_embedded);
+        {
+            auto status = initializeIfNeeded(context);
+            OP_REQUIRES_OK(context, status);
+        }
 
         // Fail if batch size changed.
         {
@@ -119,6 +148,17 @@ public:
             assert(batch_size > 0);
             OP_REQUIRES(context, batch_size == ctx->batch_, errors::InvalidArgument("Batch size changed unexpectedly."));
         }
+        
+        float *embedded;
+        try
+        {
+            embedded = tensor_adapter.GetValidatedTensor<float>(tensor_embedded, TensorAdapter::TensorType::Embedded);
+        }
+        catch(const std::runtime_error&)
+        {
+            embedded = nullptr;
+        }
+        OP_REQUIRES(context, embedded != nullptr, errors::InvalidArgument("Invalid embedded tensor dimensions."));
 
         int total_tokens_idx = tensor_embedded.dims() - 2;
         int total_tokens;
@@ -138,9 +178,10 @@ public:
                                     0, tensor_embedded.shape(),
                                     &output_tensor));
 
-        setInputMask(tensor_masks);
+
+        OP_REQUIRES_OK(context, setInputMask(tensor_masks));
         
-        float *embedded = (float *)tensor_embedded.tensor_data().data();
+        
         dnnl::memory::dims dims{ctx->batch_, total_tokens, ctx->hiddenSize};
         auto pinput = dnnl_wrappers::AttachMemory(ctx->dnnl_context.getEngine(), dims, embedded, false);
         for (const auto& bert_layer : this->bert_layers)
@@ -155,29 +196,49 @@ public:
 
 private:
 
-    void initializeIfNeeded(OpKernelContext* context, const Tensor& tensor_embedded)
+
+    tensorflow::Status initializeIfNeeded(OpKernelContext* context)
     {
         // BertContext must be initialized before BertLayers and weights,
         // so that we can verify the dimensions of the input tensor.
         // TODO: Reinitialize BertContext, and BertLayers if batch size changes.
         if (!initialized)
         {
-            initBertContext(tensor_embedded);
-            initLayers();
-            initWeights(context);
-            initialized = true;
+            try
+            {
+                auto tmp_ctx = initBertContext();   // Any of these can fail
+                auto tmp_layers = initLayers(tmp_ctx);     // 
+                initWeights(context, tmp_layers);   // 
+
+                static_assert(std::is_nothrow_move_assignable<decltype(tmp_ctx)>::value,
+                    "BertContext must be no-throw move assignable.");
+                static_assert(std::is_nothrow_move_assignable<decltype(tmp_layers)>::value,
+                    "BertLayer container must be no-throw move assignable.");
+                
+                this->ctx = std::move(tmp_ctx);             // These are static_asserted as noexcept,
+                this->bert_layers = std::move(tmp_layers);  // so at this point we're safe to move-assign.
+                
+                initialized = true;
+            }
+            // If we catch an exception here, none of the initialized
+            // resources have been commited to the BertOp member fields yet.
+            // We can safely let RAII discard them.
+            catch(const std::exception& e)
+            {
+                initialized = false;
+                return errors::Aborted(e.what());
+            }
         }
+        return Status::OK();
     }
 
-    void initBertContext(const Tensor& tensor_embedded)
+    std::unique_ptr<BertContextT> initBertContext()
     {
-        int batch_size = getBatchSize(tensor_embedded);
-        bert_ctx_builder.BatchSize(batch_size);
-
-        ctx = bert_ctx_builder.Build<InputT, BatchInputT>();
-        std::cout << "BertContext initialized: maxTokenSize = " << ctx->maxTokenSize
-                  << ", hiddenSize = " << ctx->hiddenSize << ", intermediateSize = " << ctx->intermediateSize
-                  << ", batch = " << ctx->batch_ << ", numLayers = " << ctx->numLayers << std::endl;
+        auto tmp_ctx = bert_ctx_builder.Build<InputT, BatchInputT>();
+        std::cout << "BertContext initialized: maxTokenSize = " << tmp_ctx->maxTokenSize
+                  << ", hiddenSize = " << tmp_ctx->hiddenSize << ", intermediateSize = " << tmp_ctx->intermediateSize
+                  << ", batch = " << tmp_ctx->batch_ << ", numLayers = " << tmp_ctx->numLayers << std::endl;
+        return tmp_ctx;
     }
 
     /**
@@ -208,45 +269,49 @@ private:
         return -1;
     }
 
-    void initLayers()
+    std::vector<std::unique_ptr<BertLayer<BertContextT>>> initLayers(std::unique_ptr<BertContextT>& tmp_ctx)
     {
-        bert_layers.reserve(ctx->numLayers);
+        std::vector<std::unique_ptr<BertLayer<BertContextT>>> tmp_layers;
+        tmp_layers.reserve(tmp_ctx->numLayers);
 
-        for (int i = 0; i < ctx->numLayers; ++i)
+        for (int i = 0; i < tmp_ctx->numLayers; ++i)
         {
-            bert_layers.emplace_back(std::make_unique<BertLayer<BertContextT>>(*ctx));
+            tmp_layers.emplace_back(std::make_unique<BertLayer<BertContextT>>(*tmp_ctx));
         }
-
+        return tmp_layers;
     }
 
-    void initWeights(OpKernelContext *context)
+    void initWeights(OpKernelContext *context, std::vector<std::unique_ptr<BertLayer<BertContextT>>>& layers)
     {
         int idx = 2;
-        for (size_t i = 0; i < this->bert_layers.size(); ++i)
+        for (size_t i = 0; i < layers.size(); ++i)
         {
-            float *queryW = (float *)context->input(idx++).tensor_data().data();
-            float *queryB = (float *)context->input(idx++).tensor_data().data();
-            float *keyW = (float *)context->input(idx++).tensor_data().data();
-            float *keyB = (float *)context->input(idx++).tensor_data().data();
-            float *valueW = (float *)context->input(idx++).tensor_data().data();
-            float *valueB = (float *)context->input(idx++).tensor_data().data();
+            using TT = TensorAdapter::TensorType;
+            float *queryW = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::QkvWeight);
+            float *queryB = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::QkvBias);
+            
+            float *keyW = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::QkvWeight);
+            float *keyB = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::QkvBias);
 
-            float *att_dense_w = (float *)context->input(idx++).tensor_data().data();
-            float *att_dense_b = (float *)context->input(idx++).tensor_data().data();
+            float *valueW = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::QkvWeight);
+            float *valueB = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::QkvBias);
 
-            float *gamma1 = (float *)context->input(idx++).tensor_data().data();
-            float *beta1 = (float *)context->input(idx++).tensor_data().data();
+            float *att_dense_w = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::AttentionWeight);
+            float *att_dense_b = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::AttentionBias);
 
-            float *intermediateW = (float *)context->input(idx++).tensor_data().data();
-            float *intermediateB = (float *)context->input(idx++).tensor_data().data();
+            float *gamma1 = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::NormGamma);
+            float *beta1 = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::NormBeta);
 
-            float *outputW = (float *)context->input(idx++).tensor_data().data();
-            float *outputB = (float *)context->input(idx++).tensor_data().data();
+            float *intermediateW = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::IntermediateWeight);
+            float *intermediateB = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::IntermediateBias);
 
-            float *gamma2 = (float *)context->input(idx++).tensor_data().data();
-            float *beta2 = (float *)context->input(idx++).tensor_data().data();
+            float *outputW = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::OutputWeight);
+            float *outputB = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::OutputBias);
 
-            this->bert_layers[i]->setWeights(queryW, queryB,
+            float *gamma2 = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::NormGamma);
+            float *beta2 = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::NormBeta);
+
+            layers[i]->setWeights(queryW, queryB,
                                              keyW, keyB,
                                              valueW, valueB,
                                              att_dense_w, att_dense_b,
@@ -258,45 +323,60 @@ private:
         }
     }
 
-    void setInputMask(const Tensor& mask)
+    tensorflow::Status setInputMask(const Tensor& mask)
     {
-        switch(mask.dtype()) {
-        case DT_FLOAT:
-            setInputMaskWithType<float>(mask);
-            break;
-        case DT_DOUBLE:
-            setInputMaskWithType<double>(mask);
-            break;
-        case DT_INT32:
-            setInputMaskWithType<int32_t>(mask);
-            break;
-        case DT_INT64:
-            setInputMaskWithType<int64_t>(mask);
-            break;
-        default:
-            throw std::runtime_error("Unsupported mask data type");
+        try
+        {
+            switch(mask.dtype()) {
+            case DT_FLOAT:
+                setInputMaskWithType<float>(mask);
+                break;
+            case DT_DOUBLE:
+                setInputMaskWithType<double>(mask);
+                break;
+            case DT_INT32:
+                setInputMaskWithType<int32_t>(mask);
+                break;
+            case DT_INT64:
+                setInputMaskWithType<int64_t>(mask);
+                break;
+            default:
+                throw std::runtime_error("Unsupported mask data type");
+            }
         }
+        catch(const std::runtime_error& e)
+        {
+            return errors::InvalidArgument(std::string{"Input mask error: "} + e.what());
+        }
+        return Status::OK();
     }
 
     template <typename T, std::enable_if_t<std::is_arithmetic<T>::value, bool> = true>
     void setInputMaskWithType(const Tensor& mask) {
+
+        T* data = tensor_adapter.GetValidatedTensor<T>(mask, TensorAdapter::TensorType::Mask);
+
         for(int i = 0; i < ctx->batch_; ++i)
         {
-            T* data = (T*)mask.tensor_data().data();
             // Advance the data pointer to the next batch element.
             // dim_size(1) is can be 1 or maxTokenSize, this logic
             // should work for both.
-            data += i * mask.dim_size(1) * mask.dim_size(2);
             
             ctx->setInputMask(data, i);
+            data += mask.dim_size(1) * mask.dim_size(2);
         }
     }
 
     static constexpr int max_token_size = 128;
 
     BertContextBuilder bert_ctx_builder;
+    // FIXME: (krzychut)
+    // Probably should be an std::shared_ptr.
+    // Mixing an std::unique_ptr here with a reference in BertLayer is asking for trouble.
     std::unique_ptr<BertContextT> ctx;
+
     std::vector<std::unique_ptr<BertLayer<BertContextT>>> bert_layers;
+    TensorAdapter tensor_adapter;
     bool initialized;
 
     std::vector<Layer_minmax> bert_layers_minmax = {
