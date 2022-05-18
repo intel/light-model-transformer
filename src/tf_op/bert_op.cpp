@@ -63,135 +63,157 @@ public:
         , initialized{false}
 
     {
-        int num_weights;
-        OP_REQUIRES_OK(context, context->GetAttr("NumWeights", &num_weights));
-        
-        OP_REQUIRES(context, num_weights % BertContextT::tensors_per_layer == 0,
-            errors::InvalidArgument("NumWeights must be a multiple of BertLayer::weights_per_layer"));
-
-        int hidden_size;
-        OP_REQUIRES_OK(context, context->GetAttr("HiddenSize", &hidden_size));
-
-        int intermediate_size;
-        OP_REQUIRES_OK(context, context->GetAttr("IntermediateSize", &intermediate_size));
-
-        int num_attention_heads;
-        OP_REQUIRES_OK(context, context->GetAttr("NumAttentionHeads", &num_attention_heads));
-
-        OP_REQUIRES(context, num_attention_heads * BertContextT::head_size == hidden_size,
-            errors::InvalidArgument("Constraint not met: HiddenSize = NumAttentionHead * HeadSize"));
-
-        int layers = num_weights / BertContextT::tensors_per_layer;
-
-        OP_REQUIRES(context, layers == 12, errors::InvalidArgument("Currently only BERT-base with 12 layers is supported."));
-
-        bert_ctx_builder.NumLayers(layers);
-        bert_ctx_builder.HiddenSize(hidden_size);
-        bert_ctx_builder.IntermediateSize(intermediate_size);
-        bert_ctx_builder.MaxTokenSize(max_token_size);
-        bert_ctx_builder.NumAttentionHeads(num_attention_heads);
-
-
+        try
         {
-            std::stringstream ss;
-            ss << std::boolalpha << "BertOp<" << UseQuantization << ", " << UseBFloat16 << "> constructed.";
-            std::cout << ss.str() << std::endl;
+            int num_weights;
+            OP_REQUIRES_OK(context, context->GetAttr("NumWeights", &num_weights));
+            
+            OP_REQUIRES(context, num_weights % BertContextT::tensors_per_layer == 0,
+                errors::InvalidArgument("NumWeights must be a multiple of BertLayer::weights_per_layer"));
+
+            int hidden_size;
+            OP_REQUIRES_OK(context, context->GetAttr("HiddenSize", &hidden_size));
+
+            int intermediate_size;
+            OP_REQUIRES_OK(context, context->GetAttr("IntermediateSize", &intermediate_size));
+
+            int num_attention_heads;
+            OP_REQUIRES_OK(context, context->GetAttr("NumAttentionHeads", &num_attention_heads));
+
+            OP_REQUIRES(context, num_attention_heads * BertContextT::head_size == hidden_size,
+                errors::InvalidArgument("Constraint not met: HiddenSize = NumAttentionHead * HeadSize"));
+
+            int layers = num_weights / BertContextT::tensors_per_layer;
+
+            OP_REQUIRES(context, layers == 12, errors::InvalidArgument("Currently only BERT-base with 12 layers is supported."));
+
+            bert_ctx_builder.NumLayers(layers);
+            bert_ctx_builder.HiddenSize(hidden_size);
+            bert_ctx_builder.IntermediateSize(intermediate_size);
+            bert_ctx_builder.MaxTokenSize(max_token_size);
+            bert_ctx_builder.NumAttentionHeads(num_attention_heads);
+
+
+            {
+                std::stringstream ss;
+                ss << std::boolalpha << "BertOp<" << UseQuantization << ", " << UseBFloat16 << "> constructed.";
+                std::cout << ss.str() << std::endl;
+            }
+        }
+        catch(std::exception& ex)
+        {
+            OP_REQUIRES(context, false, errors::Unknown(ex.what()));
+        }
+        catch(...)
+        {
+            OP_REQUIRES(context, false, errors::Unknown("Unknown error during Bert op construction."));
         }
     }
 
     void Compute(OpKernelContext *context) override
     {
-        const Tensor &tensor_embedded = context->input(0);
-        const Tensor &tensor_masks = context->input(1);
-
-        {
-            int batch_size = getBatchSize(tensor_embedded);
-            OP_REQUIRES(context, batch_size > 0, errors::InvalidArgument("Failed to get batch size."));
-            bert_ctx_builder.BatchSize(batch_size);
-            tensor_adapter.Init(batch_size, bert_ctx_builder.MaxTokenSize(), bert_ctx_builder.HiddenSize(),
-                                bert_ctx_builder.NumAttentionHeads(), bert_ctx_builder.IntermediateSize());
-        }
-
-
-
-        // Validate tensor dimensions.
-        // The macros won't work properly if they are in a separate function.
-        {
-            OP_REQUIRES(context, (tensor_masks.dims() == 3),
-                errors::InvalidArgument("The mask tensor must have 3 dimensions."));
-
-            OP_REQUIRES(context, (tensor_embedded.dims() == 2 || tensor_embedded.dims() == 3),
-                        errors::InvalidArgument("The input tensor must have either 2 or 3 dimensions."));
-
-            if (tensor_embedded.dims() == 2)
-            {
-                OP_REQUIRES(context, (tensor_embedded.dim_size(0) % max_token_size == 0),
-                    errors::InvalidArgument("2D input must be divisible by max_token_size on the first dimension."));
-            }
-
-            // For a 2D tensor: dim_size(1) == ctx->hiddensize,
-            // For 3D tensor: dim_size(2) == ctx->hiddensize
-            int hidden_size_dim_idx = tensor_embedded.dims() - 1;
-            OP_REQUIRES(context, (tensor_embedded.dim_size(hidden_size_dim_idx) == bert_ctx_builder.HiddenSize()),
-                        errors::InvalidArgument("Unexpected hidden size"));
-        }
-
-        // Initialize the BertContext, BertLayers and weights
-        {
-            auto status = initializeIfNeeded(context);
-            OP_REQUIRES_OK(context, status);
-        }
-
-        // Fail if batch size changed.
-        {
-            int batch_size = getBatchSize(tensor_embedded);
-            assert(batch_size > 0);
-            OP_REQUIRES(context, batch_size == ctx->batch_, errors::InvalidArgument("Batch size changed unexpectedly."));
-        }
-        
-        float *embedded;
         try
         {
-            embedded = tensor_adapter.GetValidatedTensor<float>(tensor_embedded, TensorAdapter::TensorType::Embedded);
+            const Tensor &tensor_embedded = context->input(0);
+            const Tensor &tensor_masks = context->input(1);
+
+            {
+                int batch_size = getBatchSize(tensor_embedded);
+                OP_REQUIRES(context, batch_size > 0, errors::InvalidArgument("Failed to get batch size."));
+                bert_ctx_builder.BatchSize(batch_size);
+                tensor_adapter.Init(batch_size, bert_ctx_builder.MaxTokenSize(), bert_ctx_builder.HiddenSize(),
+                                    bert_ctx_builder.NumAttentionHeads(), bert_ctx_builder.IntermediateSize());
+            }
+
+
+
+            // Validate tensor dimensions.
+            // The macros won't work properly if they are in a separate function.
+            {
+                OP_REQUIRES(context, (tensor_masks.dims() == 3),
+                    errors::InvalidArgument("The mask tensor must have 3 dimensions."));
+
+                OP_REQUIRES(context, (tensor_embedded.dims() == 2 || tensor_embedded.dims() == 3),
+                            errors::InvalidArgument("The input tensor must have either 2 or 3 dimensions."));
+
+                if (tensor_embedded.dims() == 2)
+                {
+                    OP_REQUIRES(context, (tensor_embedded.dim_size(0) % max_token_size == 0),
+                        errors::InvalidArgument("2D input must be divisible by max_token_size on the first dimension."));
+                }
+
+                // For a 2D tensor: dim_size(1) == ctx->hiddensize,
+                // For 3D tensor: dim_size(2) == ctx->hiddensize
+                int hidden_size_dim_idx = tensor_embedded.dims() - 1;
+                OP_REQUIRES(context, (tensor_embedded.dim_size(hidden_size_dim_idx) == bert_ctx_builder.HiddenSize()),
+                            errors::InvalidArgument("Unexpected hidden size"));
+            }
+
+            // Initialize the BertContext, BertLayers and weights
+            {
+                auto status = initializeIfNeeded(context);
+                OP_REQUIRES_OK(context, status);
+            }
+
+            // Fail if batch size changed.
+            {
+                int batch_size = getBatchSize(tensor_embedded);
+                assert(batch_size > 0);
+                OP_REQUIRES(context, batch_size == ctx->batch_, errors::InvalidArgument("Batch size changed unexpectedly."));
+            }
+            
+            float *embedded;
+            try
+            {
+                embedded = tensor_adapter.GetValidatedTensor<float>(tensor_embedded, TensorAdapter::TensorType::Embedded);
+            }
+            catch(const std::runtime_error&)
+            {
+                embedded = nullptr;
+            }
+            OP_REQUIRES(context, embedded != nullptr, errors::InvalidArgument("Invalid embedded tensor dimensions."));
+
+            int total_tokens_idx = tensor_embedded.dims() - 2;
+            int total_tokens;
+            assert(tensor_embedded.dims() == 2 || tensor_embedded.dims() == 3); // Checked by OP_REQUIRES above
+            if(tensor_embedded.dims() == 2)
+            {
+                total_tokens = tensor_embedded.dim_size(total_tokens_idx) / ctx->batch_; // total_tokens = batch_size * tokens_each_def128
+            }
+            else
+            {
+                total_tokens = tensor_embedded.dim_size(total_tokens_idx);
+            }
+
+            // Create an output tensor
+            Tensor *output_tensor = NULL;
+            OP_REQUIRES_OK(context, context->allocate_output(
+                                        0, tensor_embedded.shape(),
+                                        &output_tensor));
+
+
+            OP_REQUIRES_OK(context, setInputMask(tensor_masks));
+            
+            
+            dnnl::memory::dims dims{ctx->batch_, total_tokens, ctx->hiddenSize};
+            auto pinput = dnnl_wrappers::AttachMemory(ctx->dnnl_context.getEngine(), dims, embedded, false);
+            for (const auto& bert_layer : this->bert_layers)
+            {
+                bert_layer->forward(pinput);
+            }
+
+            // Copy data to output
+            OP_REQUIRES(context, output_tensor->CopyFrom(tensor_embedded, tensor_embedded.shape()),
+                                                            errors::InvalidArgument("Tensors size don't match."));
         }
-        catch(const std::runtime_error&)
+        catch(std::exception& ex)
         {
-            embedded = nullptr;
+            OP_REQUIRES(context, false, errors::Unknown(ex.what()));
         }
-        OP_REQUIRES(context, embedded != nullptr, errors::InvalidArgument("Invalid embedded tensor dimensions."));
-
-        int total_tokens_idx = tensor_embedded.dims() - 2;
-        int total_tokens;
-        assert(tensor_embedded.dims() == 2 || tensor_embedded.dims() == 3); // Checked by OP_REQUIRES above
-        if(tensor_embedded.dims() == 2)
+        catch(...)
         {
-            total_tokens = tensor_embedded.dim_size(total_tokens_idx) / ctx->batch_; // total_tokens = batch_size * tokens_each_def128
+            OP_REQUIRES(context, false, errors::Unknown("Unknown error during Bert op compute function."));
         }
-        else
-        {
-            total_tokens = tensor_embedded.dim_size(total_tokens_idx);
-        }
-
-        // Create an output tensor
-        Tensor *output_tensor = NULL;
-        OP_REQUIRES_OK(context, context->allocate_output(
-                                    0, tensor_embedded.shape(),
-                                    &output_tensor));
-
-
-        OP_REQUIRES_OK(context, setInputMask(tensor_masks));
-        
-        
-        dnnl::memory::dims dims{ctx->batch_, total_tokens, ctx->hiddenSize};
-        auto pinput = dnnl_wrappers::AttachMemory(ctx->dnnl_context.getEngine(), dims, embedded, false);
-        for (const auto& bert_layer : this->bert_layers)
-        {
-            bert_layer->forward(pinput);
-        }
-
-        // Copy data to output
-        OP_REQUIRES(context, output_tensor->CopyFrom(tensor_embedded, tensor_embedded.shape()),
-                                                        errors::InvalidArgument("Tensors size don't match."));
     }
 
 private:
