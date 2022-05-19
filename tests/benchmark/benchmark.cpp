@@ -16,7 +16,7 @@
 #include "bert_type_traits.h"
 
 static const int LAYERS = 12;
-static const int warmupTimes = 0;
+static const int warmupTimes = 10;
 static int benchmarkTimes = 1000;
 
 static const int hiddenSize = 768;
