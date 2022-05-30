@@ -18,6 +18,7 @@ from typing import Tuple
 import argparse
 import logging
 import os
+import sys
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -131,4 +132,8 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f'Unexpected error: {e}', file=sys.stderr)
+        exit(1)

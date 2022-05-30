@@ -12,7 +12,7 @@ from google.protobuf.message import DecodeError
 from google.protobuf import text_format
 
 import argparse
-
+import sys
 
 def main():
     parser = argparse.ArgumentParser(
@@ -69,4 +69,8 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f'Unexpected error: {e}', file=sys.stderr)
+        exit(1)

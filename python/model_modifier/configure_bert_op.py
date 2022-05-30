@@ -11,6 +11,7 @@ import tensorflow as tf
 
 import argparse
 import os
+import sys
 from typing import List
 
 
@@ -99,4 +100,8 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f'Unexpected error: {e}', file=sys.stderr)
+        exit(1)

@@ -15,6 +15,7 @@ from google.protobuf.message import Error as ProtoError
 import argparse
 
 import os
+import sys
 import logging
 
 
@@ -113,4 +114,8 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f'Unexpected error: {e}', file=sys.stderr)
+        exit(1)
