@@ -22,39 +22,43 @@ def compare(fname, cfolder, header, results):
     data_pr = pd.read_csv(fname, sep='\t').dropna().drop_duplicates()
     data_n  = pd.read_csv(cfolder + os.sep + fname, sep='\t').dropna().drop_duplicates()
 
-    output = pd.merge(data_n, data_pr, 
-                      on=header,
-                      how='inner',
-                      suffixes=[Nightly_suffix, PR_suffix])
+    try:
+        output = pd.merge(data_n, data_pr,
+                        on=header,
+                        how='inner',
+                        suffixes=[Nightly_suffix, PR_suffix])
 
-    # st = output.style
+        # st = output.style
 
-    no_ms = lambda x: str(x).rstrip(' samples/s')
+        no_ms = lambda x: str(x).rstrip(' samples/s')
 
-    for header in results:
-        pr = output[header + PR_suffix].map(no_ms).astype(float)
-        ni = output[header + Nightly_suffix].map(no_ms).astype(float)
-        output[header + Diff_suffix] = (pr / ni * 100).apply(lambda x: "{0:.2f}%".format(x))
-        # st.background_gradient(cmap=rgmap, vmin=0.5, vmax=1.5,
-        #                        subset=header + ' Diff')
+        for header in results:
+            pr = output[header + PR_suffix].map(no_ms).astype(float)
+            ni = output[header + Nightly_suffix].map(no_ms).astype(float)
+            output[header + Diff_suffix] = (pr / ni * 100).apply(lambda x: "{0:.2f}%".format(x))
+            # st.background_gradient(cmap=rgmap, vmin=0.5, vmax=1.5,
+            #                        subset=header + ' Diff')
 
-    # remove no longer needed columns with nightly results
-    output.drop(output.filter(regex=Nightly_suffix).columns, axis=1, inplace=True)
+        # remove no longer needed columns with nightly results
+        output.drop(output.filter(regex=Nightly_suffix).columns, axis=1, inplace=True)
 
-    # columns to mark
-    cols = []
-    for header in results:
-        cols.append(output.columns.get_loc(header + Diff_suffix))
+        # columns to mark
+        cols = []
+        for header in results:
+            cols.append(output.columns.get_loc(header + Diff_suffix))
 
-    res = BeautifulSoup(output.to_html(index=False), features='html.parser')
+        res = BeautifulSoup(output.to_html(index=False), features='html.parser')
 
-    # set color of added columns according to it's values
-    for tr in res.table.tbody.select('tr'):
-        for i in cols:
-            td = tr.select('td')[i]
-            td.attrs['bgcolor'] = color(float(td.text.strip('%')) / 100.0,
-                                        rgmap,
-                                        0.5, 1.5)
+        # set color of added columns according to it's values
+        for tr in res.table.tbody.select('tr'):
+            for i in cols:
+                td = tr.select('td')[i]
+                td.attrs['bgcolor'] = color(float(td.text.strip('%')) / 100.0,
+                                            rgmap,
+                                            0.5, 1.5)
+    except KeyError:
+        print("Something went wrong with merging, saving without comparison data")
+        res = BeautifulSoup(data_pr.to_html(index=False), features='html.parser')
 
     # for some reason plugin ignores th* flags 🤨
     for th in res.table.thead.tr.select('th'):
@@ -80,5 +84,5 @@ if __name__ == '__main__':
             results = ['Throughput'])
     compare(fname   = 'model_zoo.csv',
             cfolder = nightly_dir,
-            header  = ['Compiler', 'Model', 'Quantization', 'BFloat16', 'Batch Size'],
+            header  = ['Compiler', 'Model', 'TF', 'Quantization', 'BFloat16', 'Batch Size'],
             results = ['Result', 'Throughput'])
