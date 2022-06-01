@@ -195,7 +195,7 @@ public:
             OP_REQUIRES_OK(context, setInputMask(tensor_masks));
             
             
-            dnnl::memory::dims dims{ctx->batch_, total_tokens, ctx->hiddenSize};
+            dnnl::memory::dims dims{ctx->batch_ * total_tokens, ctx->hiddenSize};
             auto pinput = dnnl_wrappers::AttachMemory(ctx->dnnl_context.getEngine(), dims, embedded, false);
             for (const auto& bert_layer : this->bert_layers)
             {

@@ -94,19 +94,19 @@ public:
             queryWeight,
             queryBias,
             queryMatMul_
-        ) = BuildMatMul(m, n, k, qkv_SrcScale, _queryWeight, _queryBias);
+        ) = BuildInnerProduct(m, n, k, qkv_SrcScale, _queryWeight, _queryBias);
 
         std::tie(
             keyWeight,
             keyBias,
             keyMatMul_
-        ) = BuildMatMul(m, n, k, qkv_SrcScale, _keyWeight, _keyBias);
+        ) = BuildInnerProduct(m, n, k, qkv_SrcScale, _keyWeight, _keyBias);
 
         std::tie(
             valueWeight,
             valueBias,
             valueMatMul_
-        ) = BuildMatMul(m, n, k, qkv_SrcScale, _valueWeight, _valueBias);
+        ) = BuildInnerProduct(m, n, k, qkv_SrcScale, _valueWeight, _valueBias);
 
         // Batch MatMul1 with bias and scale construction
         batchMatMul1ScaleBias_ = BuildBatchMatMul1WithScaleBias();
@@ -130,19 +130,18 @@ public:
             attentionOutputWeight,
             attentionOutputBias,
             attentionMatMul_
-        ) = BuildMatMul(m, n, k, attentionout_SrcScale, _attentionOutputWeight, _attentionOutputBias, BuildAttrs().Sum());
+        ) = BuildInnerProduct(m, n, k, attentionout_SrcScale, _attentionOutputWeight, _attentionOutputBias, BuildAttrs().Sum());
 
-        // Batchnorm1
+        // Norm1
         const auto gamma1_mem = CloneMemory(eng, stm, {1, hiddenSize}, _gamma1);
         gamma1 = DataSource(gamma1_mem);
         const auto beta1_mem = CloneMemory(eng, stm, {1, hiddenSize}, _beta1);
         beta1 = DataSource(beta1_mem);
 
-        m = maxTokenSize;
-        n = hiddenSize;
+        auto ln1_md = attentionMatMul_->PrimDesc().dst_desc();
         const float epsilon = 9.999999960041972e-13;
         const dnnl::normalization_flags flags = dnnl::normalization_flags::use_scale | dnnl::normalization_flags::use_shift;
-        batchNorm_ = std::make_unique<LayerNorm>(MakeLayerNorm<float>(eng, batch_, m, n, epsilon, flags));
+        Norm1_ = std::make_unique<LayerNorm>(eng, ln1_md, epsilon, flags);
 
         // intermediate weight and bias
         m = maxTokenSize; // A.Rows();
@@ -158,7 +157,7 @@ public:
             intermediateWeight,
             intermediateBias,
             intermediateMatMul_
-        ) = BuildMatMul<input_t, input_t, float, input_t>(m, n, k, intermediate_SrcScale, _intermediateWeight, _intermediateBias,
+        ) = BuildInnerProduct<input_t, input_t, float, input_t>(m, n, k, intermediate_SrcScale, _intermediateWeight, _intermediateBias,
                         BuildAttrs().Eltwise(dnnl::algorithm::eltwise_gelu_erf, 0.f, 0.f, intermediate_PostScale));
 
         // output dense weight and bias
@@ -173,13 +172,16 @@ public:
             outputWeight,
             outputBias,
             outputMatMul_
-        ) = BuildMatMul(m, n, k, out_WScale, out_BiasScale, _outputWeight, _outputBias, BuildAttrs().Sum());
+        ) = BuildInnerProduct(m, n, k, out_WScale, out_BiasScale, _outputWeight, _outputBias, BuildAttrs().Sum());
 
-        // Output batchnorm
+        // Output Norm
         const auto gamma2_mem = CloneMemory(eng, stm, {1, hiddenSize}, _gamma2);
         gamma2 = DataSource(gamma2_mem);
         const auto beta2_mem = CloneMemory(eng, stm, {1, hiddenSize}, _beta2);
         beta2 = DataSource(beta2_mem);
+
+        auto ln2_md = outputMatMul_->PrimDesc().dst_desc();
+        Norm2_ = std::make_unique<LayerNorm>(eng, ln2_md, epsilon, flags);
     }
 
     // Do the forward computing for the whole BERT layer
@@ -189,7 +191,7 @@ public:
 
         assert([&](){
             auto dims = inputBufferMem.get_desc().dims();
-            return dims.size() == 3 && dims[0] == batch_ && dims[1] == maxTokenSize && dims[2] == hiddenSize;
+            return dims.size() == 2 && dims[0] == batch_ * maxTokenSize && dims[1] == hiddenSize;
         }());
 
         using namespace dnnl_wrappers;
@@ -241,9 +243,9 @@ public:
         auto attentionOut_SrcData = ScaledData(ctx.resultBuffer1, attentionout_SrcScale);
         attentionMatMul_->Compute(stm, attentionOut_SrcData, attentionOutputWeight, attentionOutputBias, inputBufferMem);
 
-        // BatchNorm 1
+        // Norm 1
         auto inputBufferData = DataSource(inputBufferMem);
-        batchNorm_->Compute(stm, inputBufferData, gamma1, beta1, inputBufferMem);
+        Norm1_->Compute(stm, inputBufferData, gamma1, beta1, inputBufferMem);
 
         // Intermediate with Erf
 #ifdef dynamic_quant
@@ -257,8 +259,8 @@ public:
 
         outputMatMul_->Compute(stm, output_SrcData, outputWeight, outputBias, inputBufferMem);
 
-        // Output batchnorm
-        batchNorm_->Compute(stm, inputBufferData, gamma2, beta2, inputBufferMem);
+        // Output Norm
+        Norm2_->Compute(stm, inputBufferData, gamma2, beta2, inputBufferMem);
     }
 
 private:
@@ -346,6 +348,43 @@ private:
             return BuildMatMul<Src_T, Weight_T, Bias_T, Dst_T>(m, n, k, weight_scale, bias_scale, weight, bias, attrs);
     }
 
+    template <class Src_T = input_t, class Weight_T = Src_T, class Bias_T = float, class Dst_T = float>
+    std::tuple<
+        dnnl_wrappers::CachedDataSource,        // weight_data
+        dnnl_wrappers::CachedDataSource,        // bias_data
+        std::unique_ptr<dnnl_wrappers::InnerProduct>  // InnerProduct
+    > BuildInnerProduct(int m, int n, int k,
+                  float weight_scale, float bias_scale,
+                  const float* weight, const float* bias,
+                  dnnl_wrappers::BuildAttrs attrs = {}) {
+            using namespace dnnl_wrappers;
+            auto& eng = ctx.dnnl_context.getEngine();
+            auto& stm = ctx.dnnl_context.getEngineStream();
+
+            const auto dst_scale = 1.f / bias_scale;
+
+            // Note(rfsaliev): InnerProduct expects memory format 'OI' which is transposition to Matmul 'KN'
+            const auto weight_mem = CloneMemory(eng, stm, {n, k}, weight, true);
+            const auto bias_mem = CloneMemory(eng, stm, {n}, bias);
+
+            return std::make_tuple(
+                    ScaledCachedData(weight_mem, weight_scale),
+                    ScaledCachedData(bias_mem, bias_scale),
+                    std::make_unique<InnerProduct>(MakeInnerProduct<Src_T, Weight_T, Bias_T, Dst_T>(eng, batch_, m, n, k, attrs.Scale(dst_scale)))
+            );
+    }
+
+    template <class Src_T = input_t, class Weight_T = Src_T, class Bias_T = float, class Dst_T = float>
+    std::tuple<
+        dnnl_wrappers::CachedDataSource,        // weight_data
+        dnnl_wrappers::CachedDataSource,        // bias_data
+        std::unique_ptr<dnnl_wrappers::InnerProduct>  // MatMul
+    > BuildInnerProduct(int m, int n, int k, float src_scale, const float* weight, const float* bias, dnnl_wrappers::BuildAttrs attrs = {}) {
+            const auto weight_scale = computeQuantizationScale<Weight_T>(weight, k * n);
+            const auto bias_scale = src_scale * weight_scale;
+            return BuildInnerProduct<Src_T, Weight_T, Bias_T, Dst_T>(m, n, k, weight_scale, bias_scale, weight, bias, attrs);
+    }
+
     std::unique_ptr<dnnl_wrappers::MatMul> BuildBatchMatMul1WithScaleBias() {
         const int m = maxTokenSize;
         const int k = head_size;
@@ -406,7 +445,7 @@ private:
     // Separate query, key, value weight, bias and MatMul op
     dnnl_wrappers::CachedDataSource queryWeight;
     dnnl_wrappers::CachedDataSource queryBias;
-    std::unique_ptr<dnnl_wrappers::MatMul> queryMatMul_;
+    std::unique_ptr<dnnl_wrappers::InnerProduct> queryMatMul_;
 
     std::unique_ptr<dnnl_wrappers::MatMul> batchMatMul1ScaleBias_;
 
@@ -416,30 +455,31 @@ private:
 
     dnnl_wrappers::CachedDataSource keyWeight;
     dnnl_wrappers::CachedDataSource keyBias;
-    std::unique_ptr<dnnl_wrappers::MatMul> keyMatMul_;
+    std::unique_ptr<dnnl_wrappers::InnerProduct> keyMatMul_;
 
     dnnl_wrappers::CachedDataSource valueWeight;
     dnnl_wrappers::CachedDataSource valueBias;
-    std::unique_ptr<dnnl_wrappers::MatMul> valueMatMul_;
+    std::unique_ptr<dnnl_wrappers::InnerProduct> valueMatMul_;
 
     dnnl_wrappers::CachedDataSource attentionOutputWeight;
     dnnl_wrappers::CachedDataSource attentionOutputBias;
-    std::unique_ptr<dnnl_wrappers::MatMul> attentionMatMul_;
+    std::unique_ptr<dnnl_wrappers::InnerProduct> attentionMatMul_;
 
     dnnl_wrappers::DataSource gamma1;
     dnnl_wrappers::DataSource beta1;
-    std::unique_ptr<dnnl_wrappers::LayerNorm> batchNorm_;
+    std::unique_ptr<dnnl_wrappers::LayerNorm> Norm1_;
 
     dnnl_wrappers::CachedDataSource intermediateWeight;
     dnnl_wrappers::CachedDataSource intermediateBias;
-    std::unique_ptr<dnnl_wrappers::MatMul> intermediateMatMul_;
+    std::unique_ptr<dnnl_wrappers::InnerProduct> intermediateMatMul_;
 
     dnnl_wrappers::CachedDataSource outputWeight;
     dnnl_wrappers::CachedDataSource outputBias;
-    std::unique_ptr<dnnl_wrappers::MatMul> outputMatMul_;
+    std::unique_ptr<dnnl_wrappers::InnerProduct> outputMatMul_;
 
     dnnl_wrappers::DataSource gamma2;
     dnnl_wrappers::DataSource beta2;
+    std::unique_ptr<dnnl_wrappers::LayerNorm> Norm2_;
 
     float qkv_SrcScale;
     float attentionout_SrcScale;

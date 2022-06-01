@@ -144,7 +144,7 @@ void benchmark(int tokenSize, LayerWeights *weights, float *input, int batch = 1
 
   for (int i = 0; i < warmupTimes + benchmarkTimes; ++i)
   {
-    dnnl::memory::dims dims{batch, 128, 768};
+    dnnl::memory::dims dims{batch * 128, 768};
     auto buffer = dnnl_wrappers::AttachMemory(ctx.dnnl_context.getEngine(), dims, input, false);
 
     auto start = std::chrono::steady_clock::now();

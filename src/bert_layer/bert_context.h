@@ -44,11 +44,11 @@ public:
         , batch_{batch}
         , numLayers{numLayers}
         , numHeads{hiddenSize / head_size}
-        , query{dnnl::memory::desc{{batch, maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
-        , key  {dnnl::memory::desc{{batch, maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
-        , value{dnnl::memory::desc{{batch, maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
-        , resultBuffer1{dnnl::memory::desc{{batch, maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
-        , intermediateBuffer{dnnl::memory::desc{{batch, maxTokenSize, intermediateSize}, DnnlDataType<input_t>::value, dims{}}, dnnl_context.getEngine()}
+        , query{dnnl::memory::desc{{batch * maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
+        , key  {dnnl::memory::desc{{batch * maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
+        , value{dnnl::memory::desc{{batch * maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
+        , resultBuffer1{dnnl::memory::desc{{batch * maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
+        , intermediateBuffer{dnnl::memory::desc{{batch * maxTokenSize, intermediateSize}, DnnlDataType<input_t>::value, dims{}}, dnnl_context.getEngine()}
         , qk_resultBuffer{dnnl::memory::desc{{batch, hiddenSize / head_size, maxTokenSize, maxTokenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
         , input_mask{dnnl::memory::desc{{batch, 1, 1, maxTokenSize}, dt::f32, dims{}}, dnnl_context.getEngine()} // Broadcast dimensions M and N
     {
