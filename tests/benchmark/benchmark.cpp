@@ -14,6 +14,7 @@
 
 #include "bert_layer_quant_int8.h"
 #include "bert_type_traits.h"
+#include "dnnl_data.hpp"
 
 static const int LAYERS = 12;
 static const int warmupTimes = 10;
@@ -25,86 +26,91 @@ static const int attentionHeadNum = 12;
 
 struct LayerWeights
 {
-  LayerWeights()
-    : queryWeight(hiddenSize * hiddenSize)
-    , keyWeight(hiddenSize * hiddenSize)
-    , valueWeight(hiddenSize * hiddenSize)
-    , attentionOutputWeight(hiddenSize * hiddenSize)
-    , intermediateWeight(hiddenSize * intermediateSize)
-    , outputWeight(hiddenSize * intermediateSize)
-    , queryBias(hiddenSize)
-    , keyBias(hiddenSize)
-    , valueBias(hiddenSize)
-    , attentionOutputBias(hiddenSize)
-    , outputBias(hiddenSize)
-    , gamma1(hiddenSize)
-    , beta1(hiddenSize)
-    , gamma2(hiddenSize)
-    , beta2(hiddenSize)
-    , intermediateBias(intermediateSize)
+  LayerWeights(const dnnl::engine& eng, dnnl::stream& stm)
   {
     std::minstd_rand gen;
     std::uniform_real_distribution<float> dist(-0.5f, 0.5f);
     auto rand = [&gen, &dist](){ return dist(gen); };
 
-    std::generate(queryWeight.begin(), queryWeight.end(), rand);
-    std::generate(keyWeight.begin(), keyWeight.end(), rand);
-    std::generate(valueWeight.begin(), valueWeight.end(), rand);
-    std::generate(attentionOutputWeight.begin(), attentionOutputWeight.end(), rand);
+    std::vector<float> queryWeightBuffer(hiddenSize * hiddenSize);
+    std::vector<float> keyWeightBuffer(hiddenSize * hiddenSize);
+    std::vector<float> valueWeightBuffer(hiddenSize * hiddenSize);
+    std::vector<float> attentionOutputWeightBuffer(hiddenSize * hiddenSize);
+    std::vector<float> intermediateWeightBuffer(hiddenSize * intermediateSize);
+    std::vector<float> outputWeightBuffer(hiddenSize * intermediateSize);
+    std::vector<float> queryBiasBuffer(hiddenSize);
+    std::vector<float> keyBiasBuffer(hiddenSize);
+    std::vector<float> valueBiasBuffer(hiddenSize);
+    std::vector<float> attentionOutputBiasBuffer(hiddenSize);
+    std::vector<float> outputBiasBuffer(hiddenSize);
+    std::vector<float> gamma1Buffer(hiddenSize);
+    std::vector<float> beta1Buffer(hiddenSize);
+    std::vector<float> gamma2Buffer(hiddenSize);
+    std::vector<float> beta2Buffer(hiddenSize);
+    std::vector<float> intermediateBiasBuffer(intermediateSize);
 
-    std::generate(intermediateWeight.begin(), intermediateWeight.end(), rand);
-    std::generate(outputWeight.begin(), outputWeight.end(), rand);
-
-    std::generate(queryBias.begin(), queryBias.end(), rand);
-    std::generate(keyBias.begin(), keyBias.end(), rand);
-    std::generate(valueBias.begin(), valueBias.end(), rand);
-    std::generate(attentionOutputBias.begin(), attentionOutputBias.end(), rand);
-    std::generate(outputBias.begin(), outputBias.end(), rand);
-    std::generate(gamma1.begin(), gamma1.end(), rand);
-    std::generate(beta1.begin(), beta1.end(), rand);
-    std::generate(gamma2.begin(), gamma2.end(), rand);
-    std::generate(beta2.begin(), beta2.end(), rand);
-
-    std::generate(intermediateBias.begin(), intermediateBias.end(), rand);
+    std::generate(queryWeightBuffer.begin(), queryWeightBuffer.end(), rand);
+    std::generate(keyWeightBuffer.begin(), keyWeightBuffer.end(), rand);
+    std::generate(valueWeightBuffer.begin(), valueWeightBuffer.end(), rand);
+    std::generate(attentionOutputWeightBuffer.begin(), attentionOutputWeightBuffer.end(), rand);
+    std::generate(intermediateWeightBuffer.begin(), intermediateWeightBuffer.end(), rand);
+    std::generate(outputWeightBuffer.begin(), outputWeightBuffer.end(), rand);
+    std::generate(queryBiasBuffer.begin(), queryBiasBuffer.end(), rand);
+    std::generate(keyBiasBuffer.begin(), keyBiasBuffer.end(), rand);
+    std::generate(valueBiasBuffer.begin(), valueBiasBuffer.end(), rand);
+    std::generate(attentionOutputBiasBuffer.begin(), attentionOutputBiasBuffer.end(), rand);
+    std::generate(outputBiasBuffer.begin(), outputBiasBuffer.end(), rand);
+    std::generate(gamma1Buffer.begin(), gamma1Buffer.end(), rand);
+    std::generate(beta1Buffer.begin(), beta1Buffer.end(), rand);
+    std::generate(gamma2Buffer.begin(), gamma2Buffer.end(), rand);
+    std::generate(beta2Buffer.begin(), beta2Buffer.end(), rand);
+    std::generate(intermediateBiasBuffer.begin(), intermediateBiasBuffer.end(), rand);
+    
+    queryWeight = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{hiddenSize * hiddenSize}, queryWeightBuffer.data());
+    keyWeight = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{hiddenSize * hiddenSize}, keyWeightBuffer.data());
+    valueWeight = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{hiddenSize * hiddenSize}, valueWeightBuffer.data());
+    attentionOutputWeight = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{hiddenSize * hiddenSize}, attentionOutputWeightBuffer.data());
+    intermediateWeight = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{hiddenSize * intermediateSize}, intermediateWeightBuffer.data());
+    outputWeight = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{hiddenSize * intermediateSize}, outputWeightBuffer.data());
+    queryBias = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{hiddenSize}, queryBiasBuffer.data());
+    keyBias = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{hiddenSize}, keyBiasBuffer.data());
+    valueBias = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{hiddenSize}, valueBiasBuffer.data());
+    attentionOutputBias = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{hiddenSize}, attentionOutputBiasBuffer.data());
+    outputBias = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{hiddenSize}, outputBiasBuffer.data());
+    gamma1 = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{hiddenSize}, gamma1Buffer.data());
+    beta1 = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{hiddenSize}, beta1Buffer.data());
+    gamma2 = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{hiddenSize}, gamma2Buffer.data());
+    beta2 = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{hiddenSize}, beta2Buffer.data());
+    intermediateBias = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{intermediateSize}, intermediateBiasBuffer.data());
   }
-
-  std::vector<float> queryWeight;
-  std::vector<float> keyWeight;
-  std::vector<float> valueWeight;
-  std::vector<float> attentionOutputWeight;
-
-  std::vector<float> intermediateWeight;
-  std::vector<float> outputWeight;
-
-  std::vector<float> queryBias;
-  std::vector<float> keyBias;
-  std::vector<float> valueBias;
-  std::vector<float> attentionOutputBias;
-  std::vector<float> outputBias;
-  std::vector<float> gamma1;
-  std::vector<float> beta1;
-  std::vector<float> gamma2;
-  std::vector<float> beta2;
-
-  std::vector<float> intermediateBias;
+public:
+  dnnl::memory queryWeight;
+  dnnl::memory keyWeight;
+  dnnl::memory valueWeight;
+  dnnl::memory attentionOutputWeight;
+  dnnl::memory intermediateWeight;
+  dnnl::memory outputWeight;
+  dnnl::memory queryBias;
+  dnnl::memory keyBias;
+  dnnl::memory valueBias;
+  dnnl::memory attentionOutputBias;
+  dnnl::memory outputBias;
+  dnnl::memory gamma1;
+  dnnl::memory beta1;
+  dnnl::memory gamma2;
+  dnnl::memory beta2;
+  dnnl::memory intermediateBias;
 };
 
 // MiniBatch = 1
-// template <class InputT, class BatchInputT>
-// void benchmarkMB1(int tokenSize, LayerWeights *weights, float *input)
-// {
-//   using BertContextT = BertContext<InputT, BatchInputT>;
-
-// void benchmarkMB1(int tokenSize, LayerWeights *weights, float *input)
-// {
 template <bool do_quant, bool do_bf16>
-void benchmark(int tokenSize, LayerWeights *weights, float *input, int batch = 1)
+void benchmark(int tokenSize, float *input, int batch = 1)
 {
   using InputT = typename use_quantization<do_quant>::type;
   using BatchInputT = typename use_bfloat16<do_bf16>::type;
   using BertContextT = BertContext<InputT, BatchInputT>;
 
-  BertContextT ctx(128, hiddenSize, intermediateSize, batch);
+  auto ctx = std::make_shared<BertContextT>(128, hiddenSize, intermediateSize, batch);
   std::vector<std::unique_ptr<BertLayer<BertContextT>>> bert_layers(LAYERS);
   std::vector<Layer_minmax> bert_layers_minmax = {
       {-10.85244083404541015625, 4.14164829254150390625, -1.6212508678436279296875, 2.18305110931396484375, -64.5349578857421875, 9.17784881591796875, -0.16926576197147369384765625, 12.69039154052734375},
@@ -121,19 +127,22 @@ void benchmark(int tokenSize, LayerWeights *weights, float *input, int batch = 1
       {-23.8061676025390625, 11.55181217193603515625, -2.552584171295166015625, 3.7034885883331298828125, -36.45532989501953125, 16.997623443603515625, -0.16963402926921844482421875, 8.112117767333984375},
   };
 
+  std::vector<LayerWeights> weights;
+  weights.reserve(LAYERS);
 
 
   for (int i = 0; i < LAYERS; ++i)
   {
+    weights.emplace_back(ctx->dnnl_context.getEngine(), ctx->dnnl_context.getEngineStream());
     bert_layers[i] = std::make_unique<BertLayer<BertContextT>>(ctx);
-    bert_layers[i]->setWeights(weights[i].queryWeight.data(), weights[i].queryBias.data(),
-                               weights[i].keyWeight.data(), weights[i].keyBias.data(),
-                               weights[i].valueWeight.data(), weights[i].valueBias.data(),
-                               weights[i].attentionOutputWeight.data(), weights[i].attentionOutputBias.data(),
-                               weights[i].gamma1.data(), weights[i].beta1.data(),
-                               weights[i].intermediateWeight.data(), weights[i].intermediateBias.data(),
-                               weights[i].outputWeight.data(), weights[i].outputBias.data(),
-                               weights[i].gamma2.data(), weights[i].beta2.data(),
+    bert_layers[i]->setWeights(weights[i].queryWeight, weights[i].queryBias,
+                               weights[i].keyWeight, weights[i].keyBias,
+                               weights[i].valueWeight, weights[i].valueBias,
+                               weights[i].attentionOutputWeight, weights[i].attentionOutputBias,
+                               weights[i].gamma1, weights[i].beta1,
+                               weights[i].intermediateWeight, weights[i].intermediateBias,
+                               weights[i].outputWeight, weights[i].outputBias,
+                               weights[i].gamma2, weights[i].beta2,
                                bert_layers_minmax[i]);
   }
 
@@ -145,7 +154,7 @@ void benchmark(int tokenSize, LayerWeights *weights, float *input, int batch = 1
   for (int i = 0; i < warmupTimes + benchmarkTimes; ++i)
   {
     dnnl::memory::dims dims{batch * 128, 768};
-    auto buffer = dnnl_wrappers::AttachMemory(ctx.dnnl_context.getEngine(), dims, input, false);
+    auto buffer = dnnl_wrappers::AttachMemory(ctx->dnnl_context.getEngine(), dims, input, false);
 
     auto start = std::chrono::steady_clock::now();
     for (int j = 0; j < LAYERS; ++j)
@@ -209,9 +218,6 @@ try {
   std::uniform_real_distribution<float> dist(-0.5f, 0.5f);
   std::generate(input.begin(), input.end(), [&gen, &dist](){ return  dist(gen); });
 
-  // Fake weights
-  LayerWeights weights[LAYERS];
-
   // Get BertLayer mode from command line args to let CI decide what to run.
   // Defaults to FP32.
   std::vector<std::string> flags;
@@ -229,22 +235,22 @@ try {
   {
     if (do_bfloat16)
     {
-        benchmark<true, true>(tokenSize, weights, input.data(), batchSize);
+        benchmark<true, true>(tokenSize, input.data(), batchSize);
     }
     else
     {
-        benchmark<true, false>(tokenSize, weights, input.data(), batchSize);
+        benchmark<true, false>(tokenSize, input.data(), batchSize);
     }
   }
   else
   {
     if (do_bfloat16)
     {
-        benchmark<false, true>(tokenSize, weights, input.data(), batchSize);
+        benchmark<false, true>(tokenSize, input.data(), batchSize);
     }
     else
     {
-        benchmark<false, false>(tokenSize, weights, input.data(), batchSize);
+        benchmark<false, false>(tokenSize, input.data(), batchSize);
     }
   }
 
@@ -253,6 +259,9 @@ try {
   return 1;
 } catch (const std::out_of_range& e) {
   std::cerr << "Caught out of range exception: " << e.what() << std::endl;
+  return 1;
+} catch (const dnnl::error& e) {
+  std::cerr << "Caught oneDNN error: " << e.what() << std::endl;
   return 1;
 } catch (const std::exception& e) {
   std::cerr << "Caught exception: " << e.what() << std::endl;

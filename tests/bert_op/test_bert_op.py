@@ -244,7 +244,7 @@ class TestBertOpEmbeddings(BertOpTestCase):
         b = BertOpHelper(lib=self.lib)
         invalid_shape=(b.batch, b.max_token_size + 1, b.hidden_size)
         b.input = np.zeros(shape=invalid_shape, dtype=np.float32)
-        self.assertRaises(tf.errors.InvalidArgumentError, b.call)
+        self.assertRaises(tf.errors.InternalError, b.call)
 
 class TestBertOpMask(BertOpTestCase):
     def test_mask_wrong_number_of_dims(self):

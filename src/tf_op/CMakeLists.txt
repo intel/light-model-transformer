@@ -23,7 +23,11 @@ if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
   set(CMAKE_CXX_FLAGS "-Wno-comment ${CMAKE_CXX_FLAGS}")
 # this does not differentiate between icpc and icpx
 elseif ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Intel")
-  set(CMAKE_CXX_FLAGS "-wd2196 ${CMAKE_CXX_FLAGS}")
+  # error #2196: routine is both "inline" and "noinline"
+  #   - Raised by TensorFlow op registration macros in bert_op.cpp
+  # error #1595: a class type that is not trivially copyable passed through ellipsis
+  #   - Seems to be a false positive when calling computeQuantizationScale with dnnl::memory argument
+  set(CMAKE_CXX_FLAGS "-wd2196 -wd1595 ${CMAKE_CXX_FLAGS}")
 endif()
 set(CMAKE_SHARED_LINKER_FLAGS "-Wl,--no-as-needed ${TF_LFLAGS} ${CMAKE_SHARED_LINKER_FLAGS}")
 include_directories(SYSTEM ${TF_INCLUDE})

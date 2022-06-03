@@ -161,50 +161,30 @@ public:
                 assert(batch_size > 0);
                 OP_REQUIRES(context, batch_size == ctx->batch_, errors::InvalidArgument("Batch size changed unexpectedly."));
             }
-            
-            float *embedded;
-            try
-            {
-                embedded = tensor_adapter.GetValidatedTensor<float>(tensor_embedded, TensorAdapter::TensorType::Embedded);
-            }
-            catch(const std::runtime_error&)
-            {
-                embedded = nullptr;
-            }
-            OP_REQUIRES(context, embedded != nullptr, errors::InvalidArgument("Invalid embedded tensor dimensions."));
-
-            int total_tokens_idx = tensor_embedded.dims() - 2;
-            int total_tokens;
-            assert(tensor_embedded.dims() == 2 || tensor_embedded.dims() == 3); // Checked by OP_REQUIRES above
-            if(tensor_embedded.dims() == 2)
-            {
-                total_tokens = tensor_embedded.dim_size(total_tokens_idx) / ctx->batch_; // total_tokens = batch_size * tokens_each_def128
-            }
-            else
-            {
-                total_tokens = tensor_embedded.dim_size(total_tokens_idx);
-            }
-
-            // Create an output tensor
-            Tensor *output_tensor = NULL;
-            OP_REQUIRES_OK(context, context->allocate_output(
-                                        0, tensor_embedded.shape(),
-                                        &output_tensor));
-
 
             OP_REQUIRES_OK(context, setInputMask(tensor_masks));
-            
-            
-            dnnl::memory::dims dims{ctx->batch_ * total_tokens, ctx->hiddenSize};
-            auto pinput = dnnl_wrappers::AttachMemory(ctx->dnnl_context.getEngine(), dims, embedded, false);
-            for (const auto& bert_layer : this->bert_layers)
+
+            auto embeddings = tensor_adapter.AsDnnlMemory(tensor_embedded, ctx->dnnl_context.getEngine());
+            try
             {
-                bert_layer->forward(pinput);
+                for (const auto& bert_layer : this->bert_layers)
+                {
+                    bert_layer->forward(embeddings);
+                }
+            }
+            catch (const dnnl::error& e)
+            {
+                std::string message = "Forward computation failed. what(): ";
+                message += e.what();
+                OP_REQUIRES(context, false, errors::Internal(message));
             }
 
             // Copy data to output
-            OP_REQUIRES(context, output_tensor->CopyFrom(tensor_embedded, tensor_embedded.shape()),
-                                                            errors::InvalidArgument("Tensors size don't match."));
+            Tensor output_tensor;
+            output_tensor = tensor_embedded;
+            OP_REQUIRES(context, output_tensor.IsInitialized(),
+                        errors::InvalidArgument("Failed to set output tensor."));
+            context->set_output(0, output_tensor);
         }
         catch(std::exception& ex)
         {
@@ -228,23 +208,29 @@ private:
         {
             try
             {
-                auto tmp_ctx = initBertContext();   // Any of these can fail
-                auto tmp_layers = initLayers(tmp_ctx);     // 
-                initWeights(context, tmp_layers);   // 
+                // We store all initialized objects in temporaries, so that we don't need to undo initialization if any
+                // of these fails. Any exception will be caught, and RAII will handle cleanup of these temporaries.
+                auto tmp_ctx = initBertContext();
+                auto tmp_layers = initLayers(tmp_ctx);
+                auto tmp_tensors = storeTensors(context);
+                initWeights(tmp_tensors, tmp_layers, tmp_ctx);
 
                 static_assert(std::is_nothrow_move_assignable<decltype(tmp_ctx)>::value,
                     "BertContext must be no-throw move assignable.");
                 static_assert(std::is_nothrow_move_assignable<decltype(tmp_layers)>::value,
                     "BertLayer container must be no-throw move assignable.");
+                static_assert(std::is_nothrow_move_assignable<decltype(tmp_tensors)>::value,
+                    "Tensor container must be no-throw move assignable.");
                 
-                this->ctx = std::move(tmp_ctx);             // These are static_asserted as noexcept,
-                this->bert_layers = std::move(tmp_layers);  // so at this point we're safe to move-assign.
+                // At this point everything is initialized, so we move-assign it to members.
+                // The static_asserts above ensure this is noexcept, so again, no need to undo
+                // partial initialization in case of failure.
+                this->ctx = std::move(tmp_ctx);
+                this->bert_layer_tensors = std::move(tmp_tensors);
+                this->bert_layers = std::move(tmp_layers);
                 
                 initialized = true;
             }
-            // If we catch an exception here, none of the initialized
-            // resources have been commited to the BertOp member fields yet.
-            // We can safely let RAII discard them.
             catch(const std::exception& e)
             {
                 initialized = false;
@@ -254,7 +240,7 @@ private:
         return Status::OK();
     }
 
-    std::unique_ptr<BertContextT> initBertContext()
+    std::shared_ptr<BertContextT> initBertContext()
     {
         auto tmp_ctx = bert_ctx_builder.Build<InputT, BatchInputT>();
         std::cout << "BertContext initialized: maxTokenSize = " << tmp_ctx->maxTokenSize
@@ -291,57 +277,79 @@ private:
         return -1;
     }
 
-    std::vector<std::unique_ptr<BertLayer<BertContextT>>> initLayers(std::unique_ptr<BertContextT>& tmp_ctx)
+    std::vector<std::unique_ptr<BertLayer<BertContextT>>> initLayers(const std::shared_ptr<BertContextT>& tmp_ctx)
     {
         std::vector<std::unique_ptr<BertLayer<BertContextT>>> tmp_layers;
         tmp_layers.reserve(tmp_ctx->numLayers);
 
         for (int i = 0; i < tmp_ctx->numLayers; ++i)
         {
-            tmp_layers.emplace_back(std::make_unique<BertLayer<BertContextT>>(*tmp_ctx));
+            tmp_layers.emplace_back(std::make_unique<BertLayer<BertContextT>>(tmp_ctx));
         }
         return tmp_layers;
     }
 
-    void initWeights(OpKernelContext *context, std::vector<std::unique_ptr<BertLayer<BertContextT>>>& layers)
+    std::vector<tensorflow::Tensor> storeTensors(OpKernelContext* context)
     {
-        int idx = 2;
+        std::vector<tensorflow::Tensor> tensors;
+        for(int i = 2; i < context->num_inputs(); ++i)
+        {
+            tensorflow::Tensor t;
+            if (!t.CopyFrom(context->input(i), context->input(i).shape()))
+            {
+                throw std::runtime_error("Failed to store weight tensor.");
+            }
+            tensors.emplace_back(std::move(t));
+        }
+        return tensors;
+    }
+
+    void initWeights(const std::vector<tensorflow::Tensor>& tensors,
+                     std::vector<std::unique_ptr<BertLayer<BertContextT>>>& layers,
+                     const std::shared_ptr<BertContextT> bert_context)
+    {
+        auto& engine = bert_context->dnnl_context.getEngine();
+
+        auto tensor_at = [&tensors](size_t layer, size_t offset)
+        {
+            return tensors.at(BertContextT::tensors_per_layer * layer + offset);
+        };
+
         for (size_t i = 0; i < layers.size(); ++i)
         {
-            using TT = TensorAdapter::TensorType;
-            float *queryW = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::QkvWeight);
-            float *queryB = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::QkvBias);
+            dnnl::memory queryW = tensor_adapter.AsDnnlMemory(tensor_at(i, 0), engine);
+            dnnl::memory queryB = tensor_adapter.AsDnnlMemory(tensor_at(i, 1), engine);
             
-            float *keyW = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::QkvWeight);
-            float *keyB = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::QkvBias);
+            dnnl::memory keyW = tensor_adapter.AsDnnlMemory(tensor_at(i, 2), engine);
+            dnnl::memory keyB = tensor_adapter.AsDnnlMemory(tensor_at(i, 3), engine);
 
-            float *valueW = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::QkvWeight);
-            float *valueB = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::QkvBias);
+            dnnl::memory valueW = tensor_adapter.AsDnnlMemory(tensor_at(i, 4), engine);
+            dnnl::memory valueB = tensor_adapter.AsDnnlMemory(tensor_at(i, 5), engine);
 
-            float *att_dense_w = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::AttentionWeight);
-            float *att_dense_b = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::AttentionBias);
+            dnnl::memory att_dense_w = tensor_adapter.AsDnnlMemory(tensor_at(i, 6), engine);
+            dnnl::memory att_dense_b = tensor_adapter.AsDnnlMemory(tensor_at(i, 7), engine);
 
-            float *gamma1 = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::NormGamma);
-            float *beta1 = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::NormBeta);
+            dnnl::memory gamma1 = tensor_adapter.AsDnnlMemory(tensor_at(i, 8), engine);
+            dnnl::memory beta1 = tensor_adapter.AsDnnlMemory(tensor_at(i, 9), engine);
 
-            float *intermediateW = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::IntermediateWeight);
-            float *intermediateB = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::IntermediateBias);
+            dnnl::memory intermediateW = tensor_adapter.AsDnnlMemory(tensor_at(i, 10), engine);
+            dnnl::memory intermediateB = tensor_adapter.AsDnnlMemory(tensor_at(i, 11), engine);
 
-            float *outputW = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::OutputWeight);
-            float *outputB = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::OutputBias);
+            dnnl::memory outputW = tensor_adapter.AsDnnlMemory(tensor_at(i, 12), engine);
+            dnnl::memory outputB = tensor_adapter.AsDnnlMemory(tensor_at(i, 13), engine);
 
-            float *gamma2 = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::NormGamma);
-            float *beta2 = tensor_adapter.GetValidatedTensor<float>(context->input(idx++), TT::NormBeta);
+            dnnl::memory gamma2 = tensor_adapter.AsDnnlMemory(tensor_at(i, 14), engine);
+            dnnl::memory beta2 = tensor_adapter.AsDnnlMemory(tensor_at(i, 15), engine);
 
             layers[i]->setWeights(queryW, queryB,
-                                             keyW, keyB,
-                                             valueW, valueB,
-                                             att_dense_w, att_dense_b,
-                                             gamma1, beta1,
-                                             intermediateW, intermediateB,
-                                             outputW, outputB,
-                                             gamma2, beta2,
-                                             bert_layers_minmax.at(i));
+                                  keyW, keyB,
+                                  valueW, valueB,
+                                  att_dense_w, att_dense_b,
+                                  gamma1, beta1,
+                                  intermediateW, intermediateB,
+                                  outputW, outputB,
+                                  gamma2, beta2,
+                                  bert_layers_minmax.at(i));
         }
     }
 
@@ -366,37 +374,48 @@ private:
                 throw std::runtime_error("Unsupported mask data type");
             }
         }
+        catch(const std::invalid_argument& e)
+        {
+            return errors::InvalidArgument(std::string{"Input mask argument error: "} + e.what());
+        }
+        catch(const std::out_of_range& e)
+        {
+            return errors::InvalidArgument(std::string{"Input mask out of range error: "} + e.what());
+        }
         catch(const std::runtime_error& e)
         {
-            return errors::InvalidArgument(std::string{"Input mask error: "} + e.what());
+            return errors::InvalidArgument(std::string{"Input mask runtime error: "} + e.what());
         }
         return Status::OK();
     }
 
     template <typename T, std::enable_if_t<std::is_arithmetic<T>::value, bool> = true>
     void setInputMaskWithType(const Tensor& mask) {
+        using dim = dnnl::memory::dim;
 
         T* data = tensor_adapter.GetValidatedTensor<T>(mask, TensorAdapter::TensorType::Mask);
-
-        for(int i = 0; i < ctx->batch_; ++i)
+        
+        auto count = mask.NumElements();
+        auto step = mask.dim_size(1) * mask.dim_size(2);
+        auto batches = mask.dim_size(0);
+        for(dim i = 0; i < batches; ++i)
         {
+            ctx->setInputMask(data, count, i);
+
             // Advance the data pointer to the next batch element.
-            // dim_size(1) is can be 1 or maxTokenSize, this logic
+            // dim_size(1) can be 1 or maxTokenSize, this logic
             // should work for both.
-            
-            ctx->setInputMask(data, i);
-            data += mask.dim_size(1) * mask.dim_size(2);
+            data += step;
+            count -= step;
         }
     }
 
     static constexpr int max_token_size = 128;
 
     BertContextBuilder bert_ctx_builder;
-    // FIXME: (krzychut)
-    // Probably should be an std::shared_ptr.
-    // Mixing an std::unique_ptr here with a reference in BertLayer is asking for trouble.
-    std::unique_ptr<BertContextT> ctx;
+    std::shared_ptr<BertContextT> ctx;
 
+    std::vector<tensorflow::Tensor> bert_layer_tensors; // Used to ensure lifetime of weight tensors.
     std::vector<std::unique_ptr<BertLayer<BertContextT>>> bert_layers;
     TensorAdapter tensor_adapter;
     bool initialized;

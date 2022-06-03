@@ -26,14 +26,6 @@
 
 //#define dynamic_quant
 
-namespace dnnl_wrappers {
-/// Reinterpret memory keeping origin data_type
-dnnl::memory reLayoutMemory(const dnnl::memory& mem, dnnl::memory::desc layout) {
-    layout.data.data_type = mem.get_desc().data.data_type;
-    assert(layout.get_size() == mem.get_desc().get_size());
-    return dnnl::memory{layout, mem.get_engine(), mem.get_data_handle()};
-}
-} // namespace dnnl_wrappers
 
 struct Layer_minmax {
     struct Min_max {
@@ -57,36 +49,30 @@ class BertLayer
 public:
     static constexpr int head_size = BertContextT::head_size;
 
-    // hiddenSize 768 Hidden layer neurons, number of hidden units
-    // intermediateSize 3072 feed-forward/filter size dimension 4*hiddensize 
-    BertLayer(BertContextT &_ctx, int maxTokenSize = 128, int hiddenSize = 768, int intermediateSize = 3072)
-    : ctx{_ctx}
-    , batch_{ctx.batch_} {
-        this->maxTokenSize = maxTokenSize;
-        this->hiddenSize = hiddenSize;
-        this->intermediateSize = intermediateSize;
+    // ctx->hiddenSize 768 Hidden layer neurons, number of hidden units
+    // ctx->intermediateSize 3072 feed-forward/filter size dimension 4*ctx->hiddenSize 
+    BertLayer(const std::shared_ptr<BertContextT> &_ctx)
+    : ctx{_ctx} {
     }
 
     ~BertLayer() {}
 
-    // FIXME(rfsaliev) rename `minmax` argument to avoid naming collision with `std::minmax`
-    void setWeights(const float *_queryWeight, const float *_queryBias,
-                    const float *_keyWeight, const float *_keyBias,
-                    const float *_valueWeight, const float *_valueBias,
-                    const float *_attentionOutputWeight, const float *_attentionOutputBias,
-                    const float *_gamma1, const float *_beta1,
-                    const float *_intermediateWeight, const float *_intermediateBias,
-                    const float *_outputWeight, const float *_outputBias,
-                    const float *_gamma2, const float *_beta2,
+    void setWeights(const dnnl::memory& _queryWeight, const dnnl::memory& _queryBias,
+                    const dnnl::memory& _keyWeight, const dnnl::memory& _keyBias,
+                    const dnnl::memory& _valueWeight, const dnnl::memory& _valueBias,
+                    const dnnl::memory& _attentionOutputWeight, const dnnl::memory& _attentionOutputBias,
+                    const dnnl::memory& _gamma1, const dnnl::memory& _beta1,
+                    const dnnl::memory& _intermediateWeight, const dnnl::memory& _intermediateBias,
+                    const dnnl::memory& _outputWeight, const dnnl::memory& _outputBias,
+                    const dnnl::memory& _gamma2, const dnnl::memory& _beta2,
                     const Layer_minmax& layer_minmax) {
         using namespace dnnl_wrappers;
-        auto& eng = ctx.dnnl_context.getEngine();
-        auto& stm = ctx.dnnl_context.getEngineStream();
+        auto& eng = ctx->dnnl_context.getEngine();
 
         // query, key and value sizes are same
-        auto m = maxTokenSize; // A.Rows();
-        auto n = hiddenSize; // B.Cols();
-        auto k = hiddenSize; // A.Cols() == B.Rows();
+        auto m = ctx->maxTokenSize; // A.Rows();
+        auto n = ctx->hiddenSize; // B.Cols();
+        auto k = ctx->hiddenSize; // A.Cols() == B.Rows();
 
         qkv_SrcScale = computeQuantizationScale<input_t>(layer_minmax.qkv.min, layer_minmax.qkv.max);
 
@@ -112,7 +98,7 @@ public:
         batchMatMul1ScaleBias_ = BuildBatchMatMul1WithScaleBias();
 
         // Softmax construction
-        const auto qk_result_md = ctx.qk_resultBuffer.get_desc();
+        const auto qk_result_md = ctx->qk_resultBuffer.get_desc();
         const int axis = qk_result_md.dims().size() - 1;
         softmax_ = std::make_unique<SoftMax>(eng, qk_result_md, axis);
 
@@ -120,9 +106,9 @@ public:
         batchMatMul2_ = BuildBatchMatMul2();
 
         // Weights for attention output
-        m = maxTokenSize; // A.Rows();
-        n = hiddenSize; // B.Cols();
-        k = hiddenSize; // A.Cols() == B.Rows();
+        m = ctx->maxTokenSize; // A.Rows();
+        n = ctx->hiddenSize; // B.Cols();
+        k = ctx->hiddenSize; // A.Cols() == B.Rows();
 
         attentionout_SrcScale = computeQuantizationScale<input_t>(layer_minmax.attentionout.min, layer_minmax.attentionout.max);
 
@@ -133,9 +119,9 @@ public:
         ) = BuildInnerProduct(m, n, k, attentionout_SrcScale, _attentionOutputWeight, _attentionOutputBias, BuildAttrs().Sum());
 
         // Norm1
-        const auto gamma1_mem = CloneMemory(eng, stm, {1, hiddenSize}, _gamma1);
+        const auto gamma1_mem = ReshapeMemory(_gamma1, {1, ctx->hiddenSize});
         gamma1 = DataSource(gamma1_mem);
-        const auto beta1_mem = CloneMemory(eng, stm, {1, hiddenSize}, _beta1);
+        const auto beta1_mem = ReshapeMemory(_beta1, {1, ctx->hiddenSize});
         beta1 = DataSource(beta1_mem);
 
         auto ln1_md = attentionMatMul_->PrimDesc().dst_desc();
@@ -144,9 +130,9 @@ public:
         Norm1_ = std::make_unique<LayerNorm>(eng, ln1_md, epsilon, flags);
 
         // intermediate weight and bias
-        m = maxTokenSize; // A.Rows();
-        n = intermediateSize; // B.Cols();
-        k = hiddenSize; // A.Cols() == B.Rows();
+        m = ctx->maxTokenSize; // A.Rows();
+        n = ctx->intermediateSize; // B.Cols();
+        k = ctx->hiddenSize; // A.Cols() == B.Rows();
 
         intermediate_SrcScale = computeQuantizationScale<input_t>(layer_minmax.intermediate.min,layer_minmax.intermediate.max);
 
@@ -161,11 +147,11 @@ public:
                         BuildAttrs().Eltwise(dnnl::algorithm::eltwise_gelu_erf, 0.f, 0.f, intermediate_PostScale));
 
         // output dense weight and bias
-        m = maxTokenSize; // A.Rows();
-        n = hiddenSize; // B.Cols();
-        k = intermediateSize; // A.Cols() == B.Rows();
+        m = ctx->maxTokenSize; // A.Rows();
+        n = ctx->hiddenSize; // B.Cols();
+        k = ctx->intermediateSize; // A.Cols() == B.Rows();
 
-        const auto out_WScale = computeQuantizationScale<input_t>(_outputWeight,  k * n);
+        const auto out_WScale = computeQuantizationScale<input_t>(_outputWeight);
         const auto out_BiasScale = intermediate_PostScale * out_WScale;
 
         std::tie(
@@ -175,9 +161,9 @@ public:
         ) = BuildInnerProduct(m, n, k, out_WScale, out_BiasScale, _outputWeight, _outputBias, BuildAttrs().Sum());
 
         // Output Norm
-        const auto gamma2_mem = CloneMemory(eng, stm, {1, hiddenSize}, _gamma2);
+        const auto gamma2_mem = ReshapeMemory(_gamma2, {1, ctx->hiddenSize});
         gamma2 = DataSource(gamma2_mem);
-        const auto beta2_mem = CloneMemory(eng, stm, {1, hiddenSize}, _beta2);
+        const auto beta2_mem = ReshapeMemory(_beta2, {1, ctx->hiddenSize});
         beta2 = DataSource(beta2_mem);
 
         auto ln2_md = outputMatMul_->PrimDesc().dst_desc();
@@ -185,17 +171,14 @@ public:
     }
 
     // Do the forward computing for the whole BERT layer
-    // input: maxTokenSize x hidden_size
-    // actualTokens: #tokens = maxTokenSize - padded_tokens
+    // input: ctx->maxTokenSize x hidden_size
+    // actualTokens: #tokens = ctx->maxTokenSize - padded_tokens
     void forward(dnnl::memory& inputBufferMem) {
-
-        assert([&](){
-            auto dims = inputBufferMem.get_desc().dims();
-            return dims.size() == 2 && dims[0] == batch_ * maxTokenSize && dims[1] == hiddenSize;
-        }());
-
         using namespace dnnl_wrappers;
-        auto& stm = ctx.dnnl_context.getEngineStream();
+        auto& stm = ctx->dnnl_context.getEngineStream();
+
+        dnnl::memory::dims input_dims = {ctx->batch_ * ctx->maxTokenSize, ctx->hiddenSize};
+        inputBufferMem = ReshapeMemory(inputBufferMem, input_dims);
 
 #ifdef dynamic_quant
         qkv_SrcScale = computeQuantizationScale<input_t>(inputBufferMem);
@@ -204,43 +187,43 @@ public:
         auto qkv_SrcData = ScaledData(inputBufferMem, qkv_SrcScale);
 
         // Query
-        queryMatMul_->Compute(stm, qkv_SrcData, queryWeight, queryBias, ctx.query);
+        queryMatMul_->Compute(stm, qkv_SrcData, queryWeight, queryBias, ctx->query);
 
         // Key
-        keyMatMul_->Compute(stm, qkv_SrcData, keyWeight, keyBias, ctx.key);
+        keyMatMul_->Compute(stm, qkv_SrcData, keyWeight, keyBias, ctx->key);
 
         // Value
-        valueMatMul_->Compute(stm, qkv_SrcData, valueWeight, valueBias, ctx.value);
+        valueMatMul_->Compute(stm, qkv_SrcData, valueWeight, valueBias, ctx->value);
 
 
         // Batch MatMul1 with bias and scale
         auto batchMatMul1_desc = batchMatMul1ScaleBias_->PrimDesc();
-        auto batchMatMul1_QData = DataSource(reLayoutMemory(ctx.query, batchMatMul1_desc.src_desc()));
-        auto batchMatMul1_KData = DataSource(reLayoutMemory(ctx.key, batchMatMul1_desc.weights_desc()));
-        auto batchMatMul1_MaskData = DataSource(ctx.input_mask);
+        auto batchMatMul1_QData = DataSource(ReLayoutMemory(ctx->query, batchMatMul1_desc.src_desc()));
+        auto batchMatMul1_KData = DataSource(ReLayoutMemory(ctx->key, batchMatMul1_desc.weights_desc()));
+        auto batchMatMul1_MaskData = DataSource(ctx->input_mask);
 
         std::unordered_map<int, std::reference_wrapper<DataSource>> post_ops_data = {{0, std::ref(batchMatMul1_MaskData)}};
         batchMatMul1ScaleBias_->ComputeWithPostOps(stm, batchMatMul1_QData, batchMatMul1_KData, post_ops_data,
-                                                ctx.qk_resultBuffer);
+                                                ctx->qk_resultBuffer);
 
         // Softmax
-        auto qk_resultData = DataSource(ctx.qk_resultBuffer);
-        softmax_->Compute(stm, qk_resultData, ctx.qk_resultBuffer);
+        auto qk_resultData = DataSource(ctx->qk_resultBuffer);
+        softmax_->Compute(stm, qk_resultData, ctx->qk_resultBuffer);
 
         // Batch MatMul2
         auto batchMatMul2_desc = batchMatMul2_->PrimDesc();
-        auto batchMatMul2_QKData = DataSource(ctx.qk_resultBuffer);
-        auto batchMatMul2_VData  = DataSource(reLayoutMemory(ctx.value, batchMatMul2_desc.weights_desc()));
+        auto batchMatMul2_QKData = DataSource(ctx->qk_resultBuffer);
+        auto batchMatMul2_VData  = DataSource(ReLayoutMemory(ctx->value, batchMatMul2_desc.weights_desc()));
         auto batchMatMul2_BData  = DataSource();
-        auto batchMatMul2_DMem = reLayoutMemory(ctx.resultBuffer1, batchMatMul2_desc.dst_desc());
+        auto batchMatMul2_DMem = ReLayoutMemory(ctx->resultBuffer1, batchMatMul2_desc.dst_desc());
 
         batchMatMul2_->Compute(stm, batchMatMul2_QKData, batchMatMul2_VData, batchMatMul2_BData, batchMatMul2_DMem);
 
         // Attention Output
 #ifdef dynamic_quant
-        attentionout_SrcScale = computeQuantizationScale<input_t>(ctx.resultBuffer1);
+        attentionout_SrcScale = computeQuantizationScale<input_t>(ctx->resultBuffer1);
 #endif
-        auto attentionOut_SrcData = ScaledData(ctx.resultBuffer1, attentionout_SrcScale);
+        auto attentionOut_SrcData = ScaledData(ctx->resultBuffer1, attentionout_SrcScale);
         attentionMatMul_->Compute(stm, attentionOut_SrcData, attentionOutputWeight, attentionOutputBias, inputBufferMem);
 
         // Norm 1
@@ -252,10 +235,10 @@ public:
         intermediate_SrcScale = computeQuantizationScale<input_t>(inputBufferMem);
 #endif
         auto intermediate_SrcData = ScaledData(inputBufferMem, intermediate_SrcScale);
-        intermediateMatMul_->Compute(stm, intermediate_SrcData, intermediateWeight, intermediateBias, ctx.intermediateBuffer);
+        intermediateMatMul_->Compute(stm, intermediate_SrcData, intermediateWeight, intermediateBias, ctx->intermediateBuffer);
 
         // Output MatMul with Sum
-        auto output_SrcData = DataSource(ctx.intermediateBuffer);
+        auto output_SrcData = DataSource(ctx->intermediateBuffer);
 
         outputMatMul_->Compute(stm, output_SrcData, outputWeight, outputBias, inputBufferMem);
 
@@ -299,7 +282,7 @@ private:
     typename std::enable_if_t<is_quantizable<T>::value, float>
     computeQuantizationScale(const dnnl::memory& mem) {
         assert(mem.get_desc().data_type() == dnnl::memory::data_type::f32);
-        ctx.dnnl_context.getEngineStream().wait();
+        ctx->dnnl_context.getEngineStream().wait();
         return computeQuantizationScale<T>(MemoryAccessor<float>(mem).Data(), mem.get_desc().get_size() / sizeof(float));
     }
 
@@ -319,21 +302,20 @@ private:
         std::unique_ptr<dnnl_wrappers::MatMul>  // MatMul
     > BuildMatMul(int m, int n, int k,
                   float weight_scale, float bias_scale,
-                  const float* weight, const float* bias,
+                  const dnnl::memory& weight, const dnnl::memory& bias,
                   dnnl_wrappers::BuildAttrs attrs = {}) {
             using namespace dnnl_wrappers;
-            auto& eng = ctx.dnnl_context.getEngine();
-            auto& stm = ctx.dnnl_context.getEngineStream();
+            auto& eng = ctx->dnnl_context.getEngine();
 
             const auto dst_scale = 1.f / bias_scale;
 
-            const auto weight_mem = CloneMemory(eng, stm, {1, k, n}, weight);
-            const auto bias_mem = CloneMemory(eng, stm, {1, 1, n}, bias);
+            const auto weight_mem = ReshapeMemory(weight, {1, k, n});
+            const auto bias_mem = ReshapeMemory(bias, {1, 1, n});
 
             return std::make_tuple(
                     ScaledCachedData(weight_mem, weight_scale),
                     ScaledCachedData(bias_mem, bias_scale),
-                    std::make_unique<MatMul>(MakeMatMul<Src_T, Weight_T, Bias_T, Dst_T>(eng, batch_, m, n, k, attrs.Scale(dst_scale)))
+                    std::make_unique<MatMul>(MakeMatMul<Src_T, Weight_T, Bias_T, Dst_T>(eng, ctx->batch_, m, n, k, attrs.Scale(dst_scale)))
             );
     }
 
@@ -342,8 +324,8 @@ private:
         dnnl_wrappers::CachedDataSource,        // weight_data
         dnnl_wrappers::CachedDataSource,        // bias_data
         std::unique_ptr<dnnl_wrappers::MatMul>  // MatMul
-    > BuildMatMul(int m, int n, int k, float src_scale, const float* weight, const float* bias, dnnl_wrappers::BuildAttrs attrs = {}) {
-            const auto weight_scale = computeQuantizationScale<Weight_T>(weight, k * n);
+    > BuildMatMul(int m, int n, int k, float src_scale, const dnnl::memory& weight, const dnnl::memory& bias, dnnl_wrappers::BuildAttrs attrs = {}) {
+            const auto weight_scale = computeQuantizationScale<Weight_T>(weight);
             const auto bias_scale = src_scale * weight_scale;
             return BuildMatMul<Src_T, Weight_T, Bias_T, Dst_T>(m, n, k, weight_scale, bias_scale, weight, bias, attrs);
     }
@@ -355,22 +337,23 @@ private:
         std::unique_ptr<dnnl_wrappers::InnerProduct>  // InnerProduct
     > BuildInnerProduct(int m, int n, int k,
                   float weight_scale, float bias_scale,
-                  const float* weight, const float* bias,
+                  const dnnl::memory& weight, const dnnl::memory& bias,
                   dnnl_wrappers::BuildAttrs attrs = {}) {
             using namespace dnnl_wrappers;
-            auto& eng = ctx.dnnl_context.getEngine();
-            auto& stm = ctx.dnnl_context.getEngineStream();
+            auto& eng = ctx->dnnl_context.getEngine();
 
             const auto dst_scale = 1.f / bias_scale;
 
             // Note(rfsaliev): InnerProduct expects memory format 'OI' which is transposition to Matmul 'KN'
-            const auto weight_mem = CloneMemory(eng, stm, {n, k}, weight, true);
-            const auto bias_mem = CloneMemory(eng, stm, {n}, bias);
+            // Note(krzychut): The AttachMemory call is only safe if the lifetime of the buffer can be guaranteed
+            // by outside code.
+            const auto weight_mem = AttachMemory(eng, {n, k}, (float*)weight.get_data_handle(), true);
+            const auto bias_mem = ReshapeMemory(bias, {n});
 
             return std::make_tuple(
                     ScaledCachedData(weight_mem, weight_scale),
                     ScaledCachedData(bias_mem, bias_scale),
-                    std::make_unique<InnerProduct>(MakeInnerProduct<Src_T, Weight_T, Bias_T, Dst_T>(eng, batch_, m, n, k, attrs.Scale(dst_scale)))
+                    std::make_unique<InnerProduct>(MakeInnerProduct<Src_T, Weight_T, Bias_T, Dst_T>(eng, ctx->batch_, m, n, k, attrs.Scale(dst_scale)))
             );
     }
 
@@ -379,17 +362,18 @@ private:
         dnnl_wrappers::CachedDataSource,        // weight_data
         dnnl_wrappers::CachedDataSource,        // bias_data
         std::unique_ptr<dnnl_wrappers::InnerProduct>  // MatMul
-    > BuildInnerProduct(int m, int n, int k, float src_scale, const float* weight, const float* bias, dnnl_wrappers::BuildAttrs attrs = {}) {
-            const auto weight_scale = computeQuantizationScale<Weight_T>(weight, k * n);
+    > BuildInnerProduct(int m, int n, int k, float src_scale, const dnnl::memory& weight, const dnnl::memory& bias, dnnl_wrappers::BuildAttrs attrs = {}) {
+            const auto weight_scale = computeQuantizationScale<Weight_T>(weight);
             const auto bias_scale = src_scale * weight_scale;
             return BuildInnerProduct<Src_T, Weight_T, Bias_T, Dst_T>(m, n, k, weight_scale, bias_scale, weight, bias, attrs);
     }
 
     std::unique_ptr<dnnl_wrappers::MatMul> BuildBatchMatMul1WithScaleBias() {
-        const int m = maxTokenSize;
+        const int m = ctx->maxTokenSize;
         const int k = head_size;
-        const int n = maxTokenSize; // B needs to transpose
-        const int heads = hiddenSize / head_size;
+        const int n = ctx->maxTokenSize; // B needs to transpose
+        const int batch = ctx->batch_;
+        const int heads = ctx->numHeads;
 
         const auto s_dt = DnnlDataType<batch_input_t>::value;
         const auto w_dt = DnnlDataType<batch_input_t>::value;
@@ -397,50 +381,47 @@ private:
 
         // B needs to transpose
         // dnnl::memory::format_tag::cab - is not defined
-        const dnnl::memory::dims dnnl_strides__format_tag__adbc{heads * k * m, k, 1, heads * k};
+        // const dnnl::memory::dims dnnl_strides__format_tag__adbc{heads * k * m, k, 1, heads * k};
 
-        const dnnl::memory::desc     src_md{{batch_, heads, m, k}, s_dt, dnnl::memory::format_tag::acbd};
-        const dnnl::memory::desc weights_md{{batch_, heads, k, n}, w_dt, dnnl_strides__format_tag__adbc};
+        const dnnl::memory::desc     src_md{{batch, heads, m, k}, s_dt, dnnl::memory::format_tag::acbd};
+        const dnnl::memory::desc weights_md{{batch, heads, k, n}, w_dt, dnnl::memory::format_tag::adbc};
         const dnnl::memory::desc    bias_md{};
-        const dnnl::memory::desc     dst_md{{batch_, heads, m, n}, d_dt, dnnl::memory::format_tag::abcd};
+        const dnnl::memory::desc     dst_md{{batch, heads, m, n}, d_dt, dnnl::memory::format_tag::abcd};
         
         const float scale = 0.125f;
 
         return std::make_unique<dnnl_wrappers::MatMul>(
-                    ctx.dnnl_context.getEngine(),
+                    ctx->dnnl_context.getEngine(),
                     src_md, weights_md, bias_md, dst_md,
                     dnnl_wrappers::BuildAttrs()
                         .Scale(scale)
-                        .Binary(dnnl::algorithm::binary_add, ctx.input_mask.get_desc())
+                        .Binary(dnnl::algorithm::binary_add, ctx->input_mask.get_desc())
                         );
     }
 
     std::unique_ptr<dnnl_wrappers::MatMul> BuildBatchMatMul2() {
-        const int m = maxTokenSize;
-        const int k = maxTokenSize;
+        const int m = ctx->maxTokenSize;
+        const int k = ctx->maxTokenSize;
         const int n = head_size;
-        const int heads = hiddenSize / head_size;
+        const int heads = ctx->numHeads;
+        const int batch = ctx->batch_;
 
         const auto s_dt = DnnlDataType<batch_input_t>::value;
         const auto w_dt = DnnlDataType<batch_input_t>::value;
         const auto d_dt = DnnlDataType<float>::value;
 
-        const dnnl::memory::desc     src_md{{batch_, heads, m, k}, s_dt, dnnl::memory::format_tag::abcd};
-        const dnnl::memory::desc weights_md{{batch_, heads, k, n}, w_dt, dnnl::memory::format_tag::acbd};
-        const dnnl::memory::desc     dst_md{{batch_, heads, m, n}, d_dt, dnnl::memory::format_tag::acbd};
+        const dnnl::memory::desc     src_md{{batch, heads, m, k}, s_dt, dnnl::memory::format_tag::abcd};
+        const dnnl::memory::desc weights_md{{batch, heads, k, n}, w_dt, dnnl::memory::format_tag::acbd};
+        const dnnl::memory::desc     dst_md{{batch, heads, m, n}, d_dt, dnnl::memory::format_tag::acbd};
 
         return std::make_unique<dnnl_wrappers::MatMul>(
-                        ctx.dnnl_context.getEngine(),
+                        ctx->dnnl_context.getEngine(),
                         src_md, weights_md, dnnl::memory::desc{}, dst_md,
                         dnnl::primitive_attr{});
     }
 
 private:
-    BertContextT &ctx;
-    int maxTokenSize;
-    int hiddenSize;
-    int intermediateSize;
-    int batch_;
+    std::shared_ptr<BertContextT> ctx;
 
     // Separate query, key, value weight, bias and MatMul op
     dnnl_wrappers::CachedDataSource queryWeight;

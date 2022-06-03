@@ -12,16 +12,36 @@
 
 #include <algorithm>
 #include <iterator>
+#include <numeric>
 #include <sstream>
 #include <type_traits>
-#include <vector>
 #include <unordered_map>
+#include <vector>
 
+dnnl::memory::data_type AsDnnlDataType(tensorflow::DataType data_type)
+{
+    using dt = dnnl::memory::data_type;
+    using namespace tensorflow;
+    switch(data_type) {
+        case DT_FLOAT:
+            return dt::f32;
+        case DT_INT8:
+            return dt::s8;
+        case DT_INT32:
+            return dt::s32;
+        case DT_BFLOAT16:
+            return dt::bf16;
+        default:
+            throw std::invalid_argument("Unsupported tensorflow::DataType");
+    }
+}
 
 class TensorAdapter
 {
 using dims = dnnl::memory::dims;
 using dim = dnnl::memory::dim;
+using dt = dnnl::memory::data_type;
+using tag = dnnl::memory::format_tag;
 public:
     enum class TensorType {
     Embedded,
@@ -98,7 +118,26 @@ public:
         return reinterpret_cast<T*>(const_cast<char*>(tensor.tensor_data().data()));
     }
 
+    dnnl::memory GetValidatedTensor(const tensorflow::Tensor& tensor, TensorType tensor_type, dnnl::engine& engine)
+    {
+        ThrowIfDimsInvalid(tensor, tensor_type); // This can probably be removed, we can rely on dnnl::memory::desc::reshape() in BertLayer
+        return AsDnnlMemory(tensor, engine);
+    }
+
+
+    dnnl::memory AsDnnlMemory(const tensorflow::Tensor& tensor, dnnl::engine& engine)
+    {
+        auto data_type = AsDnnlDataType(tensor.dtype());
+        auto tensor_dims = TensorDims(tensor);
+        dnnl::memory::desc md{tensor_dims, data_type, dims{}};
+        auto data = reinterpret_cast<void*>(const_cast<char*>(tensor.tensor_data().data()));
+        return dnnl::memory{md, engine, data};
+    }
+
 private:
+
+    // TODO: (krzychut)
+    dims GetTargetDims(TensorType tensor_type);
 
     void ThrowIfDimsInvalid(const tensorflow::Tensor& tensor, TensorType tensor_type)
     {
@@ -152,10 +191,10 @@ private:
      */
     dims TensorDims(const tensorflow::Tensor& tensor)
     {
-        dims dims;
-        auto tensor_dims = tensor.shape().dim_sizes();
-        std::copy(begin(tensor_dims), end(tensor_dims), std::back_inserter(dims));
-        return dims;
+        dims tensor_dims;
+        auto tmp_tensor_dims = tensor.shape().dim_sizes();
+        std::copy(begin(tmp_tensor_dims), end(tmp_tensor_dims), std::back_inserter(tensor_dims));
+        return tensor_dims;
     }
 
     std::unordered_multimap<TensorType, dims> allowed_dims;

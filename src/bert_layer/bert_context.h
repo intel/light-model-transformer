@@ -26,6 +26,8 @@ class BertContext {
 
     using dt = dnnl::memory::data_type;
     using dims = dnnl::memory::dims;
+    using dim = dnnl::memory::dim;
+
 public:
     using input_t = InputT;
     using batch_input_t = BatchInputT;
@@ -55,37 +57,36 @@ public:
         assert(hiddenSize % head_size == 0);
     }
 
-    template <typename T>
-    void setInputMask(const T *mask)
-    {
-        // TODO(rfsaliev) utilize dnnl::eltwise(linear) instead
-        auto desc = input_mask.get_desc();
-        auto dims = desc.dims();
-        int numElements = dims[3] * dims[2] * dims[1] * dims[0];
-        MemoryAccessor<float> input_mask_acc(input_mask);
-        assert(input_mask.get_desc().get_size() >= numElements * sizeof(float));
-        for (int i = 0; i < numElements; ++i)
-        {
-            input_mask_acc.Data()[i] = -10000.f * (1.f - mask[i]);
-        }
-    }
-
     /**
      * @brief Set the input mask for a specific batch element
      * 
      * @tparam T Type of the raw data pointer
      * @param input_mask Pointer to the raw data containing the input mask
+     * @param size Number of elements in the mask buffer
      * @param batch Which element of the batch to set
      */
     template <typename T>
-    void setInputMask(const T* mask, int batch)
+    void setInputMask(const T* mask, dim size, dim batch)
     {
+        // TODO(rfsaliev) utilize dnnl::eltwise(linear) instead
         auto desc = input_mask.get_desc();
         auto dims = desc.dims();
-        int m_stride = dims[3];
-        int head_stride = m_stride * dims[2];
-        int batch_stride = head_stride * dims[1];
-        assert(input_mask.get_desc().get_size() >= (batch_stride * dims[0]) * sizeof(float));
+        dim m_stride = dims[3];
+        dim head_stride = m_stride * dims[2];
+        dim batch_stride = head_stride * dims[1];
+        assert(m_stride > 0);
+        assert(head_stride > 0);
+        assert(batch_stride > 0);
+        
+        if (batch >= dims[0] || batch < 0)
+        {
+            throw std::out_of_range("Index to copy the mask buffer to is invalid.");
+        }
+        if (size < batch_stride)
+        {
+            throw std::invalid_argument("Not enough elements to copy from the mask buffer.");
+        }
+
         MemoryAccessor<float> input_mask_acc(input_mask);
         for (int h = 0; h < dims[1]; ++h)
         {
@@ -134,8 +135,8 @@ public:
 class BertContextBuilder {
 public:
     template <class InputT, class BatchInputT>
-    std::unique_ptr<BertContext<InputT, BatchInputT>> Build() {
-        return std::make_unique<BertContext<InputT, BatchInputT>>(max_token_size, hidden_size, intermediate_size,
+    std::shared_ptr<BertContext<InputT, BatchInputT>> Build() {
+        return std::make_shared<BertContext<InputT, BatchInputT>>(max_token_size, hidden_size, intermediate_size,
                                                                   batch_size, num_layers);
     }
 

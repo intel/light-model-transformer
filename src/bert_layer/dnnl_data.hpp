@@ -89,6 +89,34 @@ dnnl::memory CloneMemory(const dnnl::engine& eng, dnnl::stream& stm, dnnl::memor
     return dst;
 }
 
+/**
+ * @brief Reshape a memory object with a validity check.
+ * 
+ * @param memory The memory object to reshape.
+ * @param dims The new dimensions.
+ * @return The reshaped memory.
+ * @throws dnnl::error if the reshape cannot be performed.
+ */
+dnnl::memory ReshapeMemory(const dnnl::memory& memory, const dnnl::memory::dims& dims)
+{
+    dnnl::memory::desc md = memory.get_desc().reshape(dims);
+    return dnnl::memory{md, memory.get_engine(), memory.get_data_handle()};
+}
+
+/**
+ * @brief Reinterpret a dnnl::memory with different dimensions and format, but the same data type. Does NOT perform
+ * any validity checks.
+ * 
+ * @param mem The memory object to reinterpret.
+ * @param layout The target descriptor, data type will be overwritten.
+ * @return The reinterpreted memory.
+ */
+dnnl::memory ReLayoutMemory(const dnnl::memory& mem, dnnl::memory::desc layout) {
+    layout.data.data_type = mem.get_desc().data.data_type;
+    assert(layout.get_size() == mem.get_desc().get_size());
+    return dnnl::memory{layout, mem.get_engine(), mem.get_data_handle()};
+}
+
 DataSource ScaledData(const dnnl::memory& mem, float scale) {
         return DataSource(mem, BuildAttrs().Scale(scale));
 }
