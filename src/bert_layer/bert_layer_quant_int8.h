@@ -257,9 +257,9 @@ private:
             bool,
             std::is_integral<T>::value && !std::is_same<T, bfloat16>::value> {};
 
-    template <class T>
+    template <class T, class... Args>
     typename std::enable_if_t<!is_quantizable<T>::value, float>
-    static constexpr computeQuantizationScale(...) {
+    static constexpr computeQuantizationScale(Args...) {
         return dnnl_wrappers::BuildAttrs::noScale;
     }
 
