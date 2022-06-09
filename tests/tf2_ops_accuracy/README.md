@@ -43,9 +43,9 @@ use your selected models, so you must provide handles for TF Hub:
 
 ## Modify the model
 
-Modifying the model to use the monolithic BertOp is done using the [model modifier tool][model-modifier] tool.
+Modifying the model to use the monolithic BertOp is done using the [model modifier tool][model-modifier].
 Rather than calling the tool directly, it's easier to use a script preconfigured for a specific BERT model. Those
-scripts will be available in the [util directory][util-dir]. Currently only the [default model][default-bert] is
+scripts are available in the [util directory][util-dir]. Currently only the [default model][default-bert] is
 supported.
 
 The steps to modify the model are:
@@ -89,6 +89,15 @@ $ mv saved_model.pb original_saved_model.pb
 $ ln -s modified_saved_model.pb saved_model.pb
 ```
 This will preserve the original model graph, but calls to `tf.saved_model.load(...)` will not use the modified version.
+
+## Bert op configuration
+
+There is also a need to set bert op configuration, full tutorial on all possible options can be found [here](../../python/README.md)  
+However to launch this particular model with no quanitization and no bfloat16 you can do the following
+```
+export PYTHONPATH=$PYTHONPATH:$<repo_root>/python
+python -m model_modifier.configure_bert_op --no-quantization --no-bfloat16 $path_to_fine_tuned_model
+```
 
 
 ## Accuracy checking
