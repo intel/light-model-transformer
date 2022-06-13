@@ -106,12 +106,10 @@ public:
 template <bool do_quant, bool do_bf16>
 void benchmark(int tokenSize, float *input, int batch = 1)
 {
-  using InputT = typename use_quantization<do_quant>::type;
-  using BatchInputT = typename use_bfloat16<do_bf16>::type;
-  using BertContextT = BertContext<InputT, BatchInputT>;
+  using dt = dnnl::memory::data_type;
 
-  auto ctx = std::make_shared<BertContextT>(128, hiddenSize, intermediateSize, batch);
-  std::vector<std::unique_ptr<BertLayer<BertContextT>>> bert_layers(LAYERS);
+  auto ctx = std::make_shared<BertContext>(128, hiddenSize, intermediateSize, batch, LAYERS, do_quant, do_bf16);
+  std::vector<std::unique_ptr<BertLayer>> bert_layers(LAYERS);
   std::vector<Layer_minmax> bert_layers_minmax = {
       {-10.85244083404541015625, 4.14164829254150390625, -1.6212508678436279296875, 2.18305110931396484375, -64.5349578857421875, 9.17784881591796875, -0.16926576197147369384765625, 12.69039154052734375},
       {-10.01922702789306640625, 3.2598330974578857421875, -2.52011966705322265625, 3.17220592498779296875, -70.322662353515625, 4.564808368682861328125, -0.16925294697284698486328125, 10.93472957611083984375},
@@ -134,7 +132,7 @@ void benchmark(int tokenSize, float *input, int batch = 1)
   for (int i = 0; i < LAYERS; ++i)
   {
     weights.emplace_back(ctx->dnnl_context.getEngine(), ctx->dnnl_context.getEngineStream());
-    bert_layers[i] = std::make_unique<BertLayer<BertContextT>>(ctx);
+    bert_layers[i] = std::make_unique<BertLayer>(ctx);
     bert_layers[i]->setWeights(weights[i].queryWeight, weights[i].queryBias,
                                weights[i].keyWeight, weights[i].keyBias,
                                weights[i].valueWeight, weights[i].valueBias,

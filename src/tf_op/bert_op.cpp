@@ -49,9 +49,6 @@ REGISTER_OP("Bert")
 template <bool UseQuantization = false, bool UseBFloat16 = false>
 class BertOp : public OpKernel
 {
-    using InputT = typename use_quantization<UseQuantization>::type;
-    using BatchInputT = typename use_bfloat16<UseBFloat16>::type;
-    using BertContextT = BertContext<InputT, BatchInputT>;
 
 public:
     explicit BertOp(OpKernelConstruction* context)
@@ -68,7 +65,7 @@ public:
             int num_weights;
             OP_REQUIRES_OK(context, context->GetAttr("NumWeights", &num_weights));
             
-            OP_REQUIRES(context, num_weights % BertContextT::tensors_per_layer == 0,
+            OP_REQUIRES(context, num_weights % BertContext::tensors_per_layer == 0,
                 errors::InvalidArgument("NumWeights must be a multiple of BertLayer::weights_per_layer"));
 
             int hidden_size;
@@ -80,10 +77,10 @@ public:
             int num_attention_heads;
             OP_REQUIRES_OK(context, context->GetAttr("NumAttentionHeads", &num_attention_heads));
 
-            OP_REQUIRES(context, num_attention_heads * BertContextT::head_size == hidden_size,
+            OP_REQUIRES(context, num_attention_heads * BertContext::head_size == hidden_size,
                 errors::InvalidArgument("Constraint not met: HiddenSize = NumAttentionHead * HeadSize"));
 
-            int layers = num_weights / BertContextT::tensors_per_layer;
+            int layers = num_weights / BertContext::tensors_per_layer;
 
             OP_REQUIRES(context, layers == 12, errors::InvalidArgument("Currently only BERT-base with 12 layers is supported."));
 
@@ -93,6 +90,8 @@ public:
             bert_ctx_builder.MaxTokenSize(max_token_size);
             bert_ctx_builder.NumAttentionHeads(num_attention_heads);
 
+            bert_ctx_builder.UseQuantization(UseQuantization);
+            bert_ctx_builder.UseBfloat16(UseBFloat16);
 
             {
                 std::stringstream ss;
@@ -240,9 +239,9 @@ private:
         return Status::OK();
     }
 
-    std::shared_ptr<BertContextT> initBertContext()
+    std::shared_ptr<BertContext> initBertContext()
     {
-        auto tmp_ctx = bert_ctx_builder.Build<InputT, BatchInputT>();
+        auto tmp_ctx = bert_ctx_builder.Build();
         std::cout << "BertContext initialized: maxTokenSize = " << tmp_ctx->maxTokenSize
                   << ", hiddenSize = " << tmp_ctx->hiddenSize << ", intermediateSize = " << tmp_ctx->intermediateSize
                   << ", batch = " << tmp_ctx->batch_ << ", numLayers = " << tmp_ctx->numLayers << std::endl;
@@ -277,14 +276,14 @@ private:
         return -1;
     }
 
-    std::vector<std::unique_ptr<BertLayer<BertContextT>>> initLayers(const std::shared_ptr<BertContextT>& tmp_ctx)
+    std::vector<std::unique_ptr<BertLayer>> initLayers(const std::shared_ptr<BertContext>& tmp_ctx)
     {
-        std::vector<std::unique_ptr<BertLayer<BertContextT>>> tmp_layers;
+        std::vector<std::unique_ptr<BertLayer>> tmp_layers;
         tmp_layers.reserve(tmp_ctx->numLayers);
 
         for (int i = 0; i < tmp_ctx->numLayers; ++i)
         {
-            tmp_layers.emplace_back(std::make_unique<BertLayer<BertContextT>>(tmp_ctx));
+            tmp_layers.emplace_back(std::make_unique<BertLayer>(tmp_ctx));
         }
         return tmp_layers;
     }
@@ -305,41 +304,42 @@ private:
     }
 
     void initWeights(const std::vector<tensorflow::Tensor>& tensors,
-                     std::vector<std::unique_ptr<BertLayer<BertContextT>>>& layers,
-                     const std::shared_ptr<BertContextT> bert_context)
+                     std::vector<std::unique_ptr<BertLayer>>& layers,
+                     const std::shared_ptr<BertContext> bert_context)
     {
         auto& engine = bert_context->dnnl_context.getEngine();
 
         auto tensor_at = [&tensors](size_t layer, size_t offset)
         {
-            return tensors.at(BertContextT::tensors_per_layer * layer + offset);
+            return tensors.at(BertContext::tensors_per_layer * layer + offset);
         };
 
         for (size_t i = 0; i < layers.size(); ++i)
         {
-            dnnl::memory queryW = tensor_adapter.AsDnnlMemory(tensor_at(i, 0), engine);
-            dnnl::memory queryB = tensor_adapter.AsDnnlMemory(tensor_at(i, 1), engine);
+            using tt = TensorAdapter::TensorType;
+            dnnl::memory queryW = tensor_adapter.GetValidatedTensor(tensor_at(i, 0), tt::QkvWeight, engine);
+            dnnl::memory queryB = tensor_adapter.GetValidatedTensor(tensor_at(i, 1), tt::QkvBias, engine);
             
-            dnnl::memory keyW = tensor_adapter.AsDnnlMemory(tensor_at(i, 2), engine);
-            dnnl::memory keyB = tensor_adapter.AsDnnlMemory(tensor_at(i, 3), engine);
+            dnnl::memory keyW = tensor_adapter.GetValidatedTensor(tensor_at(i, 2), tt::QkvWeight, engine);
+            dnnl::memory keyB = tensor_adapter.GetValidatedTensor(tensor_at(i, 3), tt::QkvBias, engine);
 
-            dnnl::memory valueW = tensor_adapter.AsDnnlMemory(tensor_at(i, 4), engine);
-            dnnl::memory valueB = tensor_adapter.AsDnnlMemory(tensor_at(i, 5), engine);
+            dnnl::memory valueW = tensor_adapter.GetValidatedTensor(tensor_at(i, 4), tt::QkvWeight, engine);
+            dnnl::memory valueB = tensor_adapter.GetValidatedTensor(tensor_at(i, 5), tt::QkvBias, engine);
 
-            dnnl::memory att_dense_w = tensor_adapter.AsDnnlMemory(tensor_at(i, 6), engine);
-            dnnl::memory att_dense_b = tensor_adapter.AsDnnlMemory(tensor_at(i, 7), engine);
+            dnnl::memory att_dense_w = tensor_adapter.GetValidatedTensor(tensor_at(i, 6), tt::AttentionWeight, engine);
+            dnnl::memory att_dense_b = tensor_adapter.GetValidatedTensor(tensor_at(i, 7), tt::AttentionBias, engine);
 
-            dnnl::memory gamma1 = tensor_adapter.AsDnnlMemory(tensor_at(i, 8), engine);
-            dnnl::memory beta1 = tensor_adapter.AsDnnlMemory(tensor_at(i, 9), engine);
+            dnnl::memory gamma1 = tensor_adapter.GetValidatedTensor(tensor_at(i, 8), tt::NormGamma, engine);
+            dnnl::memory beta1 = tensor_adapter.GetValidatedTensor(tensor_at(i, 9), tt::NormBeta, engine);
 
-            dnnl::memory intermediateW = tensor_adapter.AsDnnlMemory(tensor_at(i, 10), engine);
-            dnnl::memory intermediateB = tensor_adapter.AsDnnlMemory(tensor_at(i, 11), engine);
+            dnnl::memory intermediateW = tensor_adapter.GetValidatedTensor(tensor_at(i, 10), tt::IntermediateWeight, engine);
+            dnnl::memory intermediateB = tensor_adapter.GetValidatedTensor(tensor_at(i, 11), tt::IntermediateBias, engine);
 
-            dnnl::memory outputW = tensor_adapter.AsDnnlMemory(tensor_at(i, 12), engine);
-            dnnl::memory outputB = tensor_adapter.AsDnnlMemory(tensor_at(i, 13), engine);
+            dnnl::memory outputW = tensor_adapter.GetValidatedTensor(tensor_at(i, 12), tt::OutputWeight, engine);
+            dnnl::memory outputB = tensor_adapter.GetValidatedTensor(tensor_at(i, 13), tt::OutputBias, engine);
 
-            dnnl::memory gamma2 = tensor_adapter.AsDnnlMemory(tensor_at(i, 14), engine);
-            dnnl::memory beta2 = tensor_adapter.AsDnnlMemory(tensor_at(i, 15), engine);
+            dnnl::memory gamma2 = tensor_adapter.GetValidatedTensor(tensor_at(i, 14), tt::NormGamma, engine);
+            dnnl::memory beta2 = tensor_adapter.GetValidatedTensor(tensor_at(i, 15), tt::NormBeta, engine);
 
             layers[i]->setWeights(queryW, queryB,
                                   keyW, keyB,
@@ -413,10 +413,10 @@ private:
     static constexpr int max_token_size = 128;
 
     BertContextBuilder bert_ctx_builder;
-    std::shared_ptr<BertContextT> ctx;
+    std::shared_ptr<BertContext> ctx;
 
     std::vector<tensorflow::Tensor> bert_layer_tensors; // Used to ensure lifetime of weight tensors.
-    std::vector<std::unique_ptr<BertLayer<BertContextT>>> bert_layers;
+    std::vector<std::unique_ptr<BertLayer>> bert_layers;
     TensorAdapter tensor_adapter;
     bool initialized;
 
