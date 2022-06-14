@@ -273,14 +273,14 @@ private:
     typename std::enable_if_t<is_quantizable<T>::value, float>
     static constexpr computeQuantizationScale(const float* p, size_t size) {
         // std::max_element is not constexpr until c++17
-        return std::numeric_limits<T>::max()
+        return static_cast<float>(std::numeric_limits<T>::max())
                / *std::max_element(p, p+size, [](const float& a, const float& b) { return std::abs(a) < std::abs(b); });
     }
 
     template <class T>
     typename std::enable_if_t<is_quantizable<T>::value, float>
     static constexpr computeQuantizationScale(float min, float max) {
-        return std::numeric_limits<T>::max() / std::abs(max - min);
+        return static_cast<float>(std::numeric_limits<T>::max()) / std::abs(max - min);
     }
 
     // For dynamic quantization case
