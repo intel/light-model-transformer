@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package model_modifier;
+
+import "tensorflow/core/framework/node_def.proto";
+
+message Pattern {
+    repeated tensorflow.NodeDef seed_nodes = 1;
+    repeated tensorflow.NodeDef internal_nodes = 2;
+    repeated string inputs = 3;
+}

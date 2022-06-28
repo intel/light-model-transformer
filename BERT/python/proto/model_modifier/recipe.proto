@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package model_modifier;
+
+import "model_modifier/pattern.proto";
+import "tensorflow/core/framework/node_def.proto";
+
+message Recipe {
+    Pattern source_pattern = 1;
+
+    tensorflow.NodeDef target_node = 2;
+}
