@@ -112,34 +112,33 @@ public:
      * @throws std::runtime_error if dimensions are invalid.
      */
     template<typename T, std::enable_if_t<std::is_arithmetic<T>::value, bool> = true>
-    T* GetValidatedTensor(const tensorflow::Tensor& tensor, TensorType tensor_type)
+    T* GetValidatedTensor(const tensorflow::Tensor& tensor, TensorType tensor_type) const
     {
         ThrowIfDimsInvalid(tensor, tensor_type);
         return reinterpret_cast<T*>(const_cast<char*>(tensor.tensor_data().data()));
     }
 
-    dnnl::memory GetValidatedTensor(const tensorflow::Tensor& tensor, TensorType tensor_type, dnnl::engine& engine)
+    dnnl::memory GetValidatedTensor(const tensorflow::Tensor& tensor, TensorType tensor_type, dnnl::engine& engine) const
     {
         ThrowIfDimsInvalid(tensor, tensor_type); // This can probably be removed, we can rely on dnnl::memory::desc::reshape() in BertLayer
         return AsDnnlMemory(tensor, engine);
     }
 
-
-    dnnl::memory AsDnnlMemory(const tensorflow::Tensor& tensor, dnnl::engine& engine)
+    dnnl::memory AsDnnlMemory(const tensorflow::Tensor& tensor, dnnl::engine& engine) const
     {
         auto data_type = AsDnnlDataType(tensor.dtype());
         auto tensor_dims = TensorDims(tensor);
         dnnl::memory::desc md{tensor_dims, data_type, dims{}};
+        return AsDnnlMemory(tensor, md, engine);
+    }
+
+    dnnl::memory AsDnnlMemory(const tensorflow::Tensor& tensor, dnnl::memory::desc md, dnnl::engine& engine) const
+    {
         auto data = reinterpret_cast<void*>(const_cast<char*>(tensor.tensor_data().data()));
         return dnnl::memory{md, engine, data};
     }
 
-private:
-
-    // TODO: (krzychut)
-    dims GetTargetDims(TensorType tensor_type);
-
-    void ThrowIfDimsInvalid(const tensorflow::Tensor& tensor, TensorType tensor_type)
+    void ThrowIfDimsInvalid(const tensorflow::Tensor& tensor, TensorType tensor_type) const
     {
         // Fetch the dimensions allowed for this TensorType
         auto range = allowed_dims.equal_range(tensor_type);
@@ -183,13 +182,15 @@ private:
         throw std::runtime_error("Invalid tensor dimensions. (Could not print tensor dims.)");
     }
 
+private:
+
     /**
      * @brief Get tensor dimensions as dnnl::memory::dims.
      * 
      * @param tensor The input tensor.
      * @return Tensor dimensions.
      */
-    dims TensorDims(const tensorflow::Tensor& tensor)
+    dims TensorDims(const tensorflow::Tensor& tensor) const
     {
         dims tensor_dims;
         auto tmp_tensor_dims = tensor.shape().dim_sizes();

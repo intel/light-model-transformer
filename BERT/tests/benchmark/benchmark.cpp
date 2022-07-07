@@ -144,6 +144,8 @@ void benchmark(int tokenSize, float *input, int batch = 1)
                                bert_layers_minmax[i]);
   }
 
+  using dims = dnnl::memory::dims;
+  dnnl::memory input_mask{dnnl::memory::desc{{ctx->batch_, 1, 1, ctx->maxTokenSize}, dt::f32, dims{}}, ctx->dnnl_context.getEngine()};
 
   using duration = std::chrono::steady_clock::duration;
   std::vector<duration> compute_times;
@@ -157,7 +159,7 @@ void benchmark(int tokenSize, float *input, int batch = 1)
     auto start = std::chrono::steady_clock::now();
     for (int j = 0; j < LAYERS; ++j)
     {
-      bert_layers[j]->forward(buffer);
+      bert_layers[j]->forward(buffer, input_mask);
     }
     auto end = std::chrono::steady_clock::now();
 

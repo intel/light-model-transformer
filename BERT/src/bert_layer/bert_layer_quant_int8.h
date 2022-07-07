@@ -179,12 +179,13 @@ public:
     // Do the forward computing for the whole BERT layer
     // input: ctx->maxTokenSize x hidden_size
     // actualTokens: #tokens = ctx->maxTokenSize - padded_tokens
-    void forward(dnnl::memory& inputBufferMem) {
+    void forward(dnnl::memory& inputBufferMem, const dnnl::memory& input_mask) {
         using namespace dnnl_wrappers;
         auto& stm = ctx->dnnl_context.getEngineStream();
 
         dnnl::memory::dims input_dims = {ctx->batch_ * ctx->maxTokenSize, ctx->hiddenSize};
         inputBufferMem = ReshapeMemory(inputBufferMem, input_dims);
+
 
         auto qkv_SrcData = ScaledData(inputBufferMem, qkv_SrcScale);
 
@@ -199,10 +200,11 @@ public:
 
 
         // Batch MatMul1 with bias and scale
+        auto reshaped_input_mask = ReshapeMemory(input_mask, MaskDescriptor().dims());
         auto batchMatMul1_desc = batchMatMul1ScaleBias_->PrimDesc();
         auto batchMatMul1_QData = DataSource(ReLayoutMemory(ctx->query, batchMatMul1_desc.src_desc()));
         auto batchMatMul1_KData = DataSource(ReLayoutMemory(ctx->key, batchMatMul1_desc.weights_desc()));
-        auto batchMatMul1_MaskData = DataSource(ctx->input_mask);
+        auto batchMatMul1_MaskData = DataSource(reshaped_input_mask);
 
         std::unordered_map<int, std::reference_wrapper<DataSource>> post_ops_data = {{0, std::ref(batchMatMul1_MaskData)}};
         batchMatMul1ScaleBias_->ComputeWithPostOps(stm, batchMatMul1_QData, batchMatMul1_KData, post_ops_data,
@@ -388,15 +390,16 @@ private:
         const dnnl::memory::desc weights_md{{batch, heads, k, n}, w_dt, dnnl::memory::format_tag::adbc};
         const dnnl::memory::desc    bias_md{};
         const dnnl::memory::desc     dst_md{{batch, heads, m, n}, d_dt, dnnl::memory::format_tag::abcd};
-        
-        const float scale = 0.125f;
 
+        const dnnl::memory::desc    mask_md{{ctx->batch_, 1, 1, ctx->maxTokenSize}, dt::f32, dnnl::memory::dims{}};
+
+        const float scale = 0.125f;
         return std::make_unique<dnnl_wrappers::MatMul>(
                     ctx->dnnl_context.getEngine(),
                     src_md, weights_md, bias_md, dst_md,
                     dnnl_wrappers::BuildAttrs()
                         .Scale(scale)
-                        .Binary(dnnl::algorithm::binary_add, ctx->input_mask.get_desc())
+                        .Binary(dnnl::algorithm::binary_add, mask_md)
                         );
     }
 
@@ -422,6 +425,16 @@ private:
                         dnnl::primitive_attr{});
     }
 
+    dnnl::memory::desc MaskDescriptor()
+    {
+        const auto prim_desc = batchMatMul1ScaleBias_->PrimDesc();
+        auto attr = prim_desc.get_primitive_attr();
+        auto post_ops = attr.get_post_ops();
+        dnnl::algorithm alg;
+        dnnl::memory::desc desc;
+        post_ops.get_params_binary(0, alg, desc);
+        return desc;
+    }
 private:
     std::shared_ptr<BertContext> ctx;
 

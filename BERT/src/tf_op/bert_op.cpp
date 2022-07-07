@@ -30,7 +30,7 @@ REGISTER_OP("Bert")
     .Input("input_mask: MaskT")
     .Input("weights: NumWeights * float")
     .Output("encoded: float")
-    .Attr("MaskT: {int32, int64, float, double}")
+    .Attr("MaskT: {int32, int64, float}")
     .Attr("QuantizableDataType: {float, qint8}")        // These types are arbitrary, the kernel builder macro calls
     .Attr("NonQuantizableDataType: {float, bfloat16}")  // translate these into booleans for the BertOp.
     // .Attr("UseQuantization: bool = false")   // The boolean attrs are more readable,
@@ -168,7 +168,7 @@ public:
             {
                 for (const auto& bert_layer : this->bert_layers)
                 {
-                    bert_layer->forward(embeddings);
+                    bert_layer->forward(embeddings, input_mask);
                 }
             }
             catch (const dnnl::error& e)
@@ -197,6 +197,8 @@ public:
 
 private:
 
+    using dims = dnnl::memory::dims;
+    using dt = dnnl::memory::data_type;
 
     tensorflow::Status initializeIfNeeded(OpKernelContext* context)
     {
@@ -357,30 +359,48 @@ private:
     {
         try
         {
-            switch(mask.dtype()) {
-            case DT_FLOAT:
-                setInputMaskWithType<float>(mask);
-                break;
-            case DT_DOUBLE:
-                setInputMaskWithType<double>(mask);
-                break;
-            case DT_INT32:
-                setInputMaskWithType<int32_t>(mask);
-                break;
-            case DT_INT64:
-                setInputMaskWithType<int64_t>(mask);
-                break;
-            default:
-                throw std::runtime_error("Unsupported mask data type");
+            tensor_adapter.ThrowIfDimsInvalid(mask, TensorAdapter::TensorType::Mask);
+
+
+            dnnl::memory::desc src_md;
+            dims strides;
+
+            // The mask can have dimensions {batch, 1, maxTokenSize}, or {batch, maxTokenSize, maxTokenSize}.
+            // In the latter case, the mask for each input in the batch is duplicated maxTokenSize times.
+            // A memory descriptor with dimensions and strides as below will work for both cases, skipping over any
+            // duplicate mask entries.
+            switch(mask.dtype())
+            {
+                case DT_FLOAT:
+                    strides = {mask.dim_size(1) * mask.dim_size(2), 1};
+                    src_md = dnnl::memory::desc{{mask.dim_size(0), mask.dim_size(2)}, dt::f32, strides};
+                    break;
+                case DT_INT32:
+                    strides = {mask.dim_size(1) * mask.dim_size(2), 1};
+                    src_md = dnnl::memory::desc{{mask.dim_size(0), mask.dim_size(2)}, dt::s32, strides};
+                    break;
+                case DT_INT64:
+                    // We use 2 as the last stride to ignore the 4 most significant bytes of the int64 mask values.
+                    // This way we only take the least significant 4 bytes of each value and treat them as int32.
+                    // This only works on little-endian systems.
+                    strides = {mask.dim_size(1) * mask.dim_size(2) * 2, 2};
+                    src_md = dnnl::memory::desc{{mask.dim_size(0), mask.dim_size(2)}, dt::s32, strides};
+                    break;
+                default:
+                    throw std::runtime_error("Unsupported mask data type");
             }
+
+            // Using the special memory descriptor, we can attach a dnnl::memory to the tensor buffer.
+            dnnl::memory src_mem = tensor_adapter.AsDnnlMemory(mask, src_md, ctx->dnnl_context.getEngine());
+
+            // Perform 'y = -10000 * (1 - x)' on the mask data.
+            // The result is stored in this->input_mask.
+            TransformInputMask(src_mem);
+
         }
-        catch(const std::invalid_argument& e)
+        catch(const dnnl::error& e)
         {
-            return errors::InvalidArgument(std::string{"Input mask argument error: "} + e.what());
-        }
-        catch(const std::out_of_range& e)
-        {
-            return errors::InvalidArgument(std::string{"Input mask out of range error: "} + e.what());
+            return errors::InvalidArgument(std::string{"Input mask dnnl error: "} + e.what());
         }
         catch(const std::runtime_error& e)
         {
@@ -389,24 +409,79 @@ private:
         return Status::OK();
     }
 
-    template <typename T, std::enable_if_t<std::is_arithmetic<T>::value, bool> = true>
-    void setInputMaskWithType(const Tensor& mask) {
-        using dim = dnnl::memory::dim;
+    void TransformInputMask(dnnl::memory& src_mem)
+    {
+            // We reorder the special-layout memory into a neatly packed and aligned buffer in this->input_mask.
+            // The mask transformation of 'y = -10000 * (1 - x)' can be written as 'y = 10000 * x - 10000',
+            // we do the '10000 * x' here using a post-op. 
+            InputMaskReorder(src_mem).execute(ctx->dnnl_context.getEngineStream(), src_mem, InputMask());
 
-        T* data = tensor_adapter.GetValidatedTensor<T>(mask, TensorAdapter::TensorType::Mask);
-        
-        auto count = mask.NumElements();
-        auto step = mask.dim_size(1) * mask.dim_size(2);
-        auto batches = mask.dim_size(0);
-        for(dim i = 0; i < batches; ++i)
+            // Finally, we shift the result by -10000.
+            InputMaskBinary().execute(ctx->dnnl_context.getEngineStream(), 
+            {
+                {DNNL_ARG_SRC_0, InputMask()},
+                {DNNL_ARG_SRC_1, input_mask_binary_src_1_mem},
+                {DNNL_ARG_DST, InputMask()}
+            });
+
+            ctx->dnnl_context.getEngineStream().wait();
+    }
+
+    dnnl::memory& InputMask()
+    {
+        ThrowIfContextNotInitialized();
+        if (!input_mask)
         {
-            ctx->setInputMask(data, count, i);
+            input_mask = dnnl::memory{dnnl::memory::desc{{ctx->batch_, ctx->maxTokenSize}, dt::f32, dims{}}, ctx->dnnl_context.getEngine()};
+        }
+        return input_mask;
+    }
 
-            // Advance the data pointer to the next batch element.
-            // dim_size(1) can be 1 or maxTokenSize, this logic
-            // should work for both.
-            data += step;
-            count -= step;
+    dnnl::reorder& InputMaskReorder(const dnnl::memory& src_mem)
+    {
+        ThrowIfContextNotInitialized();
+        if (!input_mask_reorder)
+        {
+            input_mask_reorder = dnnl::reorder{src_mem, InputMask(), dnnl_wrappers::BuildAttrs().Scale(10000.f)};
+        }
+        else
+        {
+            // Since we are caching the reorder primitive, we must ensure that the source memory format does not change.
+            // For example, we cannot go from an int32 mask to float32 between calls to Compute().
+            auto desc = input_mask_reorder.get_primitive_desc();
+            dnnl::reorder::primitive_desc rd{const_cast<dnnl_primitive_desc_t>(desc)};
+            if (src_mem.get_desc() != rd.src_desc())
+            {
+                throw std::runtime_error("Input mask format changed unexpectedly.");
+            }
+        }
+        return input_mask_reorder;
+    }
+
+    dnnl::binary& InputMaskBinary()
+    {
+        ThrowIfContextNotInitialized();
+        if(!input_mask_binary)
+        {
+            input_mask_binary_src_1_mem = dnnl::memory{dnnl::memory::desc{{1, 1}, dt::f32, dims{}}, ctx->dnnl_context.getEngine()};
+            // Not pretty, but avoids attaching the memory to an external data buffer.
+            *static_cast<float*>(input_mask_binary_src_1_mem.get_data_handle()) = -10000.f;
+            dnnl::binary::desc binary_d{dnnl::algorithm::binary_add, InputMask().get_desc(), input_mask_binary_src_1_mem.get_desc(),
+                                        InputMask().get_desc()};
+
+            dnnl::binary::primitive_desc binary_pd{binary_d, ctx->dnnl_context.getEngine()};
+            input_mask_binary = dnnl::binary{binary_pd};
+        }
+        return input_mask_binary;
+    }
+
+
+
+    void ThrowIfContextNotInitialized()
+    {
+        if (!ctx)
+        {
+            throw std::runtime_error("BertContext not initialized.");
         }
     }
 
@@ -434,6 +509,11 @@ private:
         {{-18.6183719635009765625, 11.54715251922607421875}, {-2.11896610260009765625, 3.066336154937744140625}, {-41.8497314453125, 19.4496479034423828125}, {-0.16698478162288665771484375, 141.4157867431640625}},
         {{-23.8061676025390625, 11.55181217193603515625}, {-2.552584171295166015625, 3.7034885883331298828125}, {-36.45532989501953125, 16.997623443603515625}, {-0.16963402926921844482421875, 8.112117767333984375}},
     };
+
+    dnnl::memory input_mask;
+    dnnl::reorder input_mask_reorder;
+    dnnl::memory input_mask_binary_src_1_mem;
+    dnnl::binary input_mask_binary;
 };
 
 
