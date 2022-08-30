@@ -33,7 +33,7 @@ python -m model_modifier.extract_pattern $1 -o $pattern \
 
 recipe=$tmpdir/recipe.pb
 
-python -m model_modifier.make_recipe -p $pattern -n fused_bert_node_def.pb -o $recipe
+python -m model_modifier.make_recipe $pattern fused_bert_node_def.pb $recipe
 
 python -m model_modifier.replace_pattern $2 -r $recipe -o $2/modified_saved_model.pb
 

@@ -16,7 +16,7 @@ Quick tutorial on how to test accuracy of a model modified to use custom bert op
 
 ## Fine tuning a model
 
-To download MRPC and fine tune bert-base model, follow the tutorial in [fine tune script](../fine_tune_script/README.md)
+To download MRPC and fine tune bert-base model, follow the tutorial in [fine tune script](../fine_tune_script)
 
 ## Modify the model
 
@@ -42,8 +42,8 @@ $ export PYTHONPATH=<repo_root/python>:$PYTHONPATH
 
 * Run the preconfigured script:
 ```sh
-$ cd <repo_root>/util/tf1/bert_en_uncased_L-12_H-768_A-12
-$ ./replace_full_bert $path_to_model $path_to_model
+$ cd <repo_root>/util/tf1/uncased_L-12_H-768_A-12
+$ ./replace_full_bert.sh $path_to_model $path_to_model
 ```
 The `path_to_model` is the path to the bert model which is an output of the run classiflier script.
 The preconfigured script will use the model modifier tools to generate a BERT `pattern.pb` from the original encoder

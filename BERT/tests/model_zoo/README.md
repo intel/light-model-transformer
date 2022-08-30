@@ -23,7 +23,7 @@ $ export PYTHONPATH=<repo_root/python>:$PYTHONPATH
 * Run the preconfigured script:
 ```sh
 $ cd <repo_root>/util/tf2-github/uncased_L-12_H-768_A-12/
-$ ./replace_full_bert $path_to_frozen_graph $path_to_frozen_graph
+$ ./replace_full_bert.sh $path_to_frozen_graph $path_to_frozen_graph
 ```
 path_to_frozen_graph=$OUTPUT_DIR/frozen_graph.pb if you followed the tutorial<br />
 This will result in modified_saved_model.pb (frozen graph in reality) being created in /util/tf2-github/uncased_L-12_H-768_A-12/ which is a modified frozen graph that uses a custom operator.

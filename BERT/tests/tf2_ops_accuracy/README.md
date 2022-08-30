@@ -67,7 +67,7 @@ $ export PYTHONPATH=<repo_root/python>:$PYTHONPATH
 * Run the preconfigured script:
 ```sh
 $ cd <repo_root>/util/tf2/bert_en_uncased_L-12_H-768_A-12_4
-$ ./replace_full_bert $path_to_bert_encoder $path_to_fine_tuned_model
+$ ./replace_full_bert.sh $path_to_bert_encoder $path_to_fine_tuned_model
 ```
 The `path_to_bert_encoder` should be the BERT encoder model, as downloaded from TF Hub. \
 The `path_to_fine_tuned_model` is the path to the output model of `run_classifier.py` \

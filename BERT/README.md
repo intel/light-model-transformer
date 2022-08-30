@@ -9,27 +9,12 @@ Currently only models built using tensorflow 1.x and 2.x are supported.
 
 # Table of contents
 
-- [Building from source](#Building-from-source)
 - [Requirements for building from source](#Requirements-for-building-from-source)
+- [Building from source](#Building-from-source)
 - [Getting started](#Getting-started)
 - [License](#license)
 - [Security](#security)
 - [Support](#support)
-
-
-# Building from source 
-1. Clone and build:
-```sh
-git clone ...
-cd libraries.ai.performance.models.bert
-mkdir build
-cd build
-source /opt/intel/oneapi/setvars.sh # Make sure CMake can find oneDNN
-cmake ..
-cmake --build . -j 8
-```
-2. Run benchmark: `tests/benchmark/benchmark`
-
 
 # Requirements for building from source
 Bert model optimization supports systems meeting the following requirements:
@@ -37,6 +22,19 @@ Bert model optimization supports systems meeting the following requirements:
 * C++ compiler
 * [CMake](https://cmake.org/download/)
 * Linux based operating system 
+
+# Building from source 
+1. Clone and build:
+```sh
+git clone https://github.com/intel/light-model-transformer
+cd light-model-transformer/BERT
+mkdir build
+cd build
+source /opt/intel/oneapi/setvars.sh # Make sure CMake can find oneDNN
+cmake ..
+cmake --build . -j 8
+```
+2. Run benchmark: `tests/benchmark/benchmark`
 
 # Getting started 
 For the currently supported use cases, short tutorials on usage are provided.

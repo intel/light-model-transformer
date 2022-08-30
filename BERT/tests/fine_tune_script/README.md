@@ -5,6 +5,8 @@ This is fine-tune script which must be run on already pre-trained model. This ac
 Original script is available
 https://github.com/google-research/bert/blob/master/run_classifier.py
 
+note: Original run_classifier.py do not generate saved_model.pb. In order to generate saved model from ckpt model please use run_classifier that is available in this repository.
+
 ## Prerequisites
 
  1. Install TensorFlow 1.15
