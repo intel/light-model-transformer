@@ -43,8 +43,9 @@ $ export PYTHONPATH=<repo_root/python>:$PYTHONPATH
 * Run the preconfigured script:
 ```sh
 $ cd <repo_root>/util/tf1/uncased_L-12_H-768_A-12
-$ ./replace_full_bert.sh $path_to_model $path_to_model
+$ ./replace_full_bert.sh $path_to_model $path_to_model $output_path
 ```
+The `output_path` is the path to file where modified model will be saved for example: `/tmp/output/modified_model.pb`
 The `path_to_model` is the path to the bert model which is an output of the run classiflier script.
 The preconfigured script will use the model modifier tools to generate a BERT `pattern.pb` from the original encoder
 model, combine it with the `fused_bert_node_def.pb` included with the script to create a `recipe.pb`, then use that
@@ -53,14 +54,14 @@ recipe to locate the BERT pattern in the fine-tuned model and replace it with th
 
 * Enable the modified model graph.
 
-The tool above creates a `modified_saved_model.pb` next to the `saved_model.pb` of the fine-tuned model. To use the
+The tool above creates a modified model protobuf of the fine-tuned model at the location specified by `output_path`. To use the
 modified graph, do:
 ```sh
 $ cd $path_to_model
 $ mv saved_model.pb original_saved_model.pb
-$ ln -s modified_saved_model.pb saved_model.pb
+$ ln -s <your-modified-protobuf> saved_model.pb
 ```
-This will preserve the original model graph, but calls to `tf.saved_model.load(...)` will not use the modified version.
+This will preserve the original model graph, but calls to `tf.saved_model.load(...)` will now use the modified version.
 
 ## Bert op configuration
 

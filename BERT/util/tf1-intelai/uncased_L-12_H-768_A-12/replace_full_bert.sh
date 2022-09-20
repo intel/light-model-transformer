@@ -20,7 +20,7 @@ pattern=$tmpdir/pattern.pb
 
 python -m model_modifier.extract_pattern $1 -o $pattern \
 -s \
-    bert/encoder/layer_11/output/LayerNorm/batchnorm/add_1 \
+    bert/encoder/layer_11/output/layer_normalization_24/batchnorm/add_1  \
 -b \
     bert/encoder/Reshape_1 \
     bert/encoder/Reshape \
@@ -29,12 +29,13 @@ python -m model_modifier.extract_pattern $1 -o $pattern \
 -B \
     Identity \
     Const \
+    ReadVariableOp \
 -m 0
 
 recipe=$tmpdir/recipe.pb
 
-python -m model_modifier.make_recipe $pattern fused_bert_node_def.pb $recipe
+python -m model_modifier.make_recipe $pattern fused_bert_node_def.pbtxt $recipe
 
-python -m model_modifier.replace_pattern $2 -r $recipe -o $2/modified_saved_model.pb
+python -m model_modifier.replace_pattern $2 -r $recipe -o $3
 
 popd
