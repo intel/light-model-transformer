@@ -30,7 +30,8 @@ class BertOpHelper(object):
     def __init__(self, *, lib: ModuleType, batch: int = 1, max_token_size: int = 128, num_weights: int = 192,
                  hidden_size: int = 768, num_attention_heads: int = 12, intermediate_size: int = 3072,
                  quantizable_datatype: tf.DType = tf.float32, non_quantizable_datatype: tf.DType = tf.float32,
-                 hidden_act: str = 'gelu_tanh', format: TensorFormat = TensorFormat.TF2, reuse_weights: bool = True):
+                 hidden_act: str = 'gelu_tanh', calibrate_quant_factors: bool = False, quantization_factors_path: str = '',
+                 format: TensorFormat = TensorFormat.TF2, reuse_weights: bool = True):
 
         if num_weights % 16 != 0:
             raise ValueError('num_weighs must be a multiple of 16.')
@@ -50,6 +51,8 @@ class BertOpHelper(object):
         self.quantizable_datatype = quantizable_datatype
         self.non_quantizable_datatype = non_quantizable_datatype
         self.hidden_act = hidden_act
+        self.calibrate_quant_factors = calibrate_quant_factors
+        self.quantization_factors_path = quantization_factors_path
         self.reuse_weights = reuse_weights
         self.tensor_format = format
 
@@ -151,7 +154,12 @@ class BertOpHelper(object):
             weights=self.weights,
             QuantizableDataType=self.quantizable_datatype,
             NonQuantizableDataType=self.non_quantizable_datatype,
-            HiddenAct=self.hidden_act
+            HiddenSize=self.hidden_size,
+            NumAttentionHeads=self.num_attention_heads,
+            IntermediateSize=self.intermediate_size,
+            HiddenAct=self.hidden_act,
+            CalibrateQuantFactors=self.calibrate_quant_factors,
+            QuantizationFactorsPath=self.quantization_factors_path
         )
 
 
@@ -193,20 +201,11 @@ class TestBertOpDefault(BertOpTestCase):
         b.call()
 
 
-class TestBertOpAttributes(BertOpTestCase):
+class TestBertOpQuantization(BertOpTestCase):
     def test_quantization(self):
-        b = BertOpHelper(lib=self.lib, quantizable_datatype=tf.qint8)
-        b.call()
-
-    @unittest.skip("Can only be enabled on BF16-capable machines.")
-    def test_bfloat16(self):
-        b = BertOpHelper(lib=self.lib, non_quantizable_datatype=tf.bfloat16)
-        b.call()
-
-    @unittest.skip("Can only be enabled on BF16-capable machines")
-    def test_quantization_bfloat16(self):
-        b = BertOpHelper(lib=self.lib, quantizable_datatype=tf.qint8,
-                         non_quantizable_datatype=tf.bfloat16)
+        p = os.path.dirname(os.path.realpath(__file__))
+        p = os.path.join(p, 'quant_factors_uncased_L-12_H-768_A-12.txt')
+        b = BertOpHelper(lib=self.lib, quantizable_datatype=tf.qint8, quantization_factors_path=p)
         b.call()
 
     def test_wrong_quantization_dtype(self):
@@ -215,15 +214,68 @@ class TestBertOpAttributes(BertOpTestCase):
         b.quantizable_datatype = tf.int16
         self.assertRaises(tf.errors.InvalidArgumentError, b.call)
 
+    def test_quantization_factors_calibration(self):
+        p = '/tmp/test_bert_op_TestBertOpQuantization_test_quantization_factors_calibration'
+        # Cleanup previous executions, if any.
+        try:
+            os.remove(p)
+        except FileNotFoundError: # FileNotFound is fine, any other exceptions should cause the test to abort
+            pass
+
+        b = BertOpHelper(lib=self.lib, calibrate_quant_factors=True, quantization_factors_path=p)
+        b.call()
+        with open(p, 'r') as f:
+            text = f.read()
+            text = text.strip()
+            floats = [float(t) for t in text.split()]
+            self.assertEqual(len(floats), b.layers*8)
+
+
+    def test_quantization_invalid_quant_factors_file(self):
+        p = os.path.dirname(os.path.realpath(__file__))
+        p = os.path.join(p, 'quant_factors_uncased_L-12_H-768_A-12_INVALID.txt')
+        b = BertOpHelper(lib=self.lib, quantizable_datatype=tf.qint8, quantization_factors_path=p)
+        self.assertRaises(tf.errors.AbortedError, b.call)
+
+    def test_quantization_quant_factors_file_not_exist(self):
+        b = BertOpHelper(lib=self.lib, quantizable_datatype=tf.qint8, quantization_factors_path='file_does_not_exist')
+        self.assertRaises(tf.errors.AbortedError, b.call)
+
+    def test_quantization_with_calibration_mode_enabled(self):
+        b = BertOpHelper(lib=self.lib, quantizable_datatype=tf.qint8, calibrate_quant_factors=True)
+        self.assertRaises(tf.errors.InvalidArgumentError, b.call)
+
+
+
+class TestBertOpBFloat16(BertOpTestCase):
+    @unittest.skip("Can only be enabled on BF16-capable machines.")
+    def test_bfloat16(self):
+        b = BertOpHelper(lib=self.lib, non_quantizable_datatype=tf.bfloat16)
+        b.call()
+
     def test_wrong_bf16_datatype(self):
         b = BertOpHelper(lib=self.lib)
         # Set to any incorrect dtype (i.e. not in [tf.float32, tf.bfloat16])
         b.non_quantizable_datatype = tf.int16
         self.assertRaises(tf.errors.InvalidArgumentError, b.call)
 
+    def test_bfloat16_with_calibration_mode_enabled(self):
+        b = BertOpHelper(lib=self.lib, non_quantizable_datatype=tf.bfloat16, calibrate_quant_factors=True)
+        self.assertRaises(tf.errors.InvalidArgumentError, b.call)
+
+class TestBertOpQuantizationBFloat16(BertOpTestCase):
+    @unittest.skip("Can only be enabled on BF16-capable machines")
+    def test_quantization_bfloat16(self):
+        b = BertOpHelper(lib=self.lib, quantizable_datatype=tf.qint8,
+                         non_quantizable_datatype=tf.bfloat16)
+        b.call()
+
+
+class TestBertOpAttributes(BertOpTestCase):
     def test_wrong_hidden_act(self):
         b = BertOpHelper(lib = self.lib, hidden_act='invalid_value')
         self.assertRaises(tf.errors.InvalidArgumentError, b.call)
+
 
 class TestBertOpEmbeddings(BertOpTestCase):
     def test_embedded_wrong_number_of_dims(self):
@@ -245,6 +297,7 @@ class TestBertOpEmbeddings(BertOpTestCase):
         invalid_shape=(b.batch, b.max_token_size + 1, b.hidden_size)
         b.input = np.zeros(shape=invalid_shape, dtype=np.float32)
         self.assertRaises(tf.errors.InternalError, b.call)
+
 
 class TestBertOpMask(BertOpTestCase):
     def test_mask_wrong_number_of_dims(self):

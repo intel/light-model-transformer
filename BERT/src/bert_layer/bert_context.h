@@ -31,7 +31,7 @@ public:
     static constexpr int tensors_per_layer = 16;
 
     BertContext(int maxTokenSize = 128, int hiddenSize = 768, int intermediateSize = 3072, int batch = 1,
-                int numLayers = 12, bool use_quantization = false, bool use_bfloat16 = false)
+                int numLayers = 12, bool use_quantization = false, bool use_bfloat16 = false, bool calibrate_quant_factors = false)
         : maxTokenSize{maxTokenSize}
         , hiddenSize{hiddenSize}
         , intermediateSize{intermediateSize}
@@ -40,6 +40,7 @@ public:
         , numHeads{hiddenSize / head_size}
         , use_quantization{use_quantization}
         , use_bfloat16{use_bfloat16}
+        , calibrate_quant_factors{calibrate_quant_factors}
         , query{dnnl::memory::desc{{batch * maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
         , key  {dnnl::memory::desc{{batch * maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
         , value{dnnl::memory::desc{{batch * maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
@@ -64,6 +65,7 @@ public:
     int numHeads;
     bool use_quantization;
     bool use_bfloat16;
+    bool calibrate_quant_factors;
     DnnlCommon dnnl_context;
 
     // Store the result of input*qkvWeight
@@ -90,7 +92,7 @@ public:
 
     std::shared_ptr<BertContext> Build() {
         return std::make_shared<BertContext>(max_token_size, hidden_size, intermediate_size, batch_size, num_layers,
-                                             use_quantization, use_bfloat16);
+                                             use_quantization, use_bfloat16, calibrate_quant_factors);
     }
 
     void MaxTokenSize(int max_token_size) { this->max_token_size = max_token_size; }
@@ -101,6 +103,7 @@ public:
     void NumAttentionHeads (int num_attention_heads) { this->num_attention_heads = num_attention_heads; }
     void UseQuantization (bool b) { this->use_quantization = b; }
     void UseBfloat16 (bool b) { this->use_bfloat16 = b; }
+    void CalibrateQuantFactors(bool b) { this->calibrate_quant_factors = b; }
 
     int MaxTokenSize() const { return this->max_token_size; }
     int HiddenSize() const { return this->hidden_size; }
@@ -110,6 +113,7 @@ public:
     int NumAttentionHeads() const { return this->num_attention_heads; }
     bool UseQuantization () const { return this->use_quantization; }
     bool UseBfloat16 () const { return this->use_bfloat16; }
+    bool CalibrateQuantFactors() const { return this->calibrate_quant_factors; }
 
 private:
     int max_token_size = 128;
@@ -120,6 +124,7 @@ private:
     int num_attention_heads = 12;
     bool use_quantization = false;
     bool use_bfloat16 = false;
+    bool calibrate_quant_factors = false;
 };
 
 #endif

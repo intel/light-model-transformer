@@ -110,7 +110,7 @@ void benchmark(int tokenSize, float *input, int batch = 1)
 
   auto ctx = std::make_shared<BertContext>(128, hiddenSize, intermediateSize, batch, LAYERS, do_quant, do_bf16);
   std::vector<std::unique_ptr<BertLayer>> bert_layers(LAYERS);
-  std::vector<Layer_minmax> bert_layers_minmax = {
+  std::vector<QuantizationFactors> quant_factors = {
       {-10.85244083404541015625, 4.14164829254150390625, -1.6212508678436279296875, 2.18305110931396484375, -64.5349578857421875, 9.17784881591796875, -0.16926576197147369384765625, 12.69039154052734375},
       {-10.01922702789306640625, 3.2598330974578857421875, -2.52011966705322265625, 3.17220592498779296875, -70.322662353515625, 4.564808368682861328125, -0.16925294697284698486328125, 10.93472957611083984375},
       {-11.37454319000244140625, 4.04611110687255859375, -2.5044767856597900390625, 3.4310567378997802734375, -56.21540069580078125, 5.208764553070068359375, -0.16948534548282623291015625, 72.20577239990234375},
@@ -128,7 +128,6 @@ void benchmark(int tokenSize, float *input, int batch = 1)
   std::vector<LayerWeights> weights;
   weights.reserve(LAYERS);
 
-
   for (int i = 0; i < LAYERS; ++i)
   {
     weights.emplace_back(ctx->dnnl_context.getEngine(), ctx->dnnl_context.getEngineStream());
@@ -140,8 +139,7 @@ void benchmark(int tokenSize, float *input, int batch = 1)
                                weights[i].gamma1, weights[i].beta1,
                                weights[i].intermediateWeight, weights[i].intermediateBias,
                                weights[i].outputWeight, weights[i].outputBias,
-                               weights[i].gamma2, weights[i].beta2,
-                               bert_layers_minmax[i]);
+                               weights[i].gamma2, weights[i].beta2, quant_factors[i]);
   }
 
   using dims = dnnl::memory::dims;

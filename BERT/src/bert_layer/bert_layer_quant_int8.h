@@ -11,6 +11,7 @@
 #include "dnnl_data.hpp"
 #include "dnnl_ops.hpp"
 #include "bert_type_traits.h"
+#include "quant_factors.hpp"
 
 #include "dnnl.hpp"
 
@@ -24,17 +25,6 @@
 #include <type_traits>
 #include <vector>
 
-
-struct Layer_minmax {
-    struct Min_max {
-        float min;
-        float max;
-    };
-    Min_max qkv;
-    Min_max attentionout;
-    Min_max intermediate;
-    Min_max intermediate_post;
-};
 
 class BertLayer
 {
@@ -66,8 +56,10 @@ public:
                     const dnnl::memory& _intermediateWeight, const dnnl::memory& _intermediateBias,
                     const dnnl::memory& _outputWeight, const dnnl::memory& _outputBias,
                     const dnnl::memory& _gamma2, const dnnl::memory& _beta2,
-                    const Layer_minmax& layer_minmax) {
+                    const QuantizationFactors& _quant_factors = QuantizationFactors{}) {
         using namespace dnnl_wrappers;
+        quant_factors_ = _quant_factors;
+
         auto& eng = ctx->dnnl_context.getEngine();
 
         // query, key and value sizes are same
@@ -77,7 +69,7 @@ public:
 
         const auto quantization_type = ctx->QuantizationType();
 
-        qkv_SrcScale = computeQuantizationScale(quantization_type, layer_minmax.qkv.min, layer_minmax.qkv.max);
+        qkv_SrcScale = computeQuantizationScale(quantization_type, quant_factors_.qkv.min, quant_factors_.qkv.max);
 
         OpDataTypes op_data_types{quantization_type, quantization_type, dt::f32, dt::f32};
         std::tie(
@@ -114,7 +106,7 @@ public:
         n = ctx->hiddenSize; // B.Cols();
         k = ctx->hiddenSize; // A.Cols() == B.Rows();
 
-        attentionout_SrcScale = computeQuantizationScale(quantization_type, layer_minmax.attentionout.min, layer_minmax.attentionout.max);
+        attentionout_SrcScale = computeQuantizationScale(quantization_type, quant_factors_.attention_out.min, quant_factors_.attention_out.max);
 
         std::tie(
             attentionOutputWeight,
@@ -138,10 +130,10 @@ public:
         n = ctx->intermediateSize; // B.Cols();
         k = ctx->hiddenSize; // A.Cols() == B.Rows();
 
-        intermediate_SrcScale = computeQuantizationScale(quantization_type, layer_minmax.intermediate.min,layer_minmax.intermediate.max);
+        intermediate_SrcScale = computeQuantizationScale(quantization_type, quant_factors_.intermediate.min,quant_factors_.intermediate.max);
 
         // Apply source quantization scale for output matmul to intermediate matmul result
-        const auto intermediate_PostScale = computeQuantizationScale(quantization_type, layer_minmax.intermediate_post.min, layer_minmax.intermediate_post.max);
+        const auto intermediate_PostScale = computeQuantizationScale(quantization_type, quant_factors_.intermediate_post.min, quant_factors_.intermediate_post.max);
 
         op_data_types = {quantization_type, quantization_type, dt::f32, quantization_type};
         std::tie(
@@ -186,6 +178,10 @@ public:
         dnnl::memory::dims input_dims = {ctx->batch_ * ctx->maxTokenSize, ctx->hiddenSize};
         inputBufferMem = ReshapeMemory(inputBufferMem, input_dims);
 
+        if (ctx->calibrate_quant_factors)
+        {
+            quant_factors_.qkv.Update(inputBufferMem);
+        }
 
         auto qkv_SrcData = ScaledData(inputBufferMem, qkv_SrcScale);
 
@@ -235,6 +231,13 @@ public:
         auto intermediate_SrcData = ScaledData(inputBufferMem, intermediate_SrcScale);
         intermediateMatMul_->Compute(stm, intermediate_SrcData, intermediateWeight, intermediateBias, ctx->intermediateBuffer);
 
+        if (ctx->calibrate_quant_factors)
+        {
+            quant_factors_.attention_out.Update(ctx->resultBuffer1);
+            quant_factors_.intermediate.Update(inputBufferMem);
+            quant_factors_.intermediate_post.Update(ctx->intermediateBuffer);
+        }
+
         // Output MatMul with Sum
         auto output_SrcData = DataSource(ctx->intermediateBuffer);
 
@@ -244,7 +247,14 @@ public:
         Norm2_->Compute(stm, inputBufferData, gamma2, beta2, inputBufferMem);
     }
 
+    const QuantizationFactors& QuantFactors()
+    {
+        return quant_factors_;
+    }
+
 private:
+
+
     template <class T,
               typename = typename std::enable_if<
                                     std::is_arithmetic<T>::value
@@ -283,6 +293,8 @@ private:
     typename std::enable_if_t<is_quantizable<T>::value, float>
     static constexpr computeQuantizationScale(float min, float max) {
         return static_cast<float>(std::numeric_limits<T>::max()) / std::abs(max - min);
+        // TODO: (krzychut) clarify if smaller range would be enough:
+        // return static_cast<float>(std::numeric_limits<T>::max()) / std::max(std::abs(min), std::abs(max));
     }
 
     // For dynamic quantization case
@@ -480,6 +492,8 @@ private:
     float qkv_SrcScale;
     float attentionout_SrcScale;
     float intermediate_SrcScale;
+
+    QuantizationFactors quant_factors_;
 };
 
 #endif

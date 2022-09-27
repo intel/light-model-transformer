@@ -26,7 +26,11 @@ pushd $(dirname $0)
 printf "${CXX_COMPILER}\t${path_to_model##*/}\t${TF_VERSION}\t-\t-\t" >> $out_file
 $Python3_EXECUTABLE accuracy.py --model_path=$path_to_model --data_dir=$data_dir --op_path=$path_to_bertop --vocab_file=$vocab_path --out_file=$out_file
 
-$Python3_EXECUTABLE -m model_modifier.configure_bert_op $QUANTIZATION $BFLOAT16 $path_to_modified_model
+$Python3_EXECUTABLE -m model_modifier.configure_bert_op \
+    $QUANTIZATION \
+    $BFLOAT16 \
+    --quant-factors-path=$QUANT_FACTORS_PATH \
+    $path_to_modified_model
 
 printf "${CXX_COMPILER}\t${path_to_modified_model##*/}\t${TF_VERSION}\t${QUANTIZATION}\t${BFLOAT16}\t" >> $out_file
 $Python3_EXECUTABLE accuracy.py --model_path=$path_to_modified_model --data_dir=$data_dir --op_path=$path_to_bertop --vocab_file=$vocab_path --out_file=$out_file

@@ -175,34 +175,83 @@ work on both of them, but it is not an intentional feature.
 
 ## Bert op configuration
 
-The `configure_bert_op.py` tool can be used to set the quantization and bfloat16 attributes of all Bert operators in a
-modified model. The attributes can be set independently. The tool works both on saved and frozen model formats.
+The `configure_bert_op.py` tool can be used to set the quantization, bfloat16 and other attributes of all Bert operators
+in a modified model. The attributes can be set independently. The tool works both on saved and frozen model formats.
 
-### Examples
+See the output of `python -m model_modifier.configure_bert_op --help` for the full list of available parameters.
+
+### Useful BertOp configurations
+
+#### Pure FP32 mode
+
+```sh
+$ python -m model_modifier.configure_bert_op \
+    --no-quantization \
+    --no-bfloat16 \
+    /path/to/saved/model/folder
+```
+
+In this mode, the Bert op uses FP32 to perform all computations.
+
+#### Calibration mode
+
+```sh
+$ python -m model_modifier.configure_bert_op \
+    --no-quantization \
+    --no-bfloat16 \
+    --calibrate \
+    --quant-factors-path /path/to/quantization/factors/file \
+    /path/to/saved/model/folder
+```
+
+In this mode, the Bert op will run all computations using FP32, but will track the highest and lowest values of input
+tensors and intermediate buffers. These will be saved to the file indicated by `--quant-factors-path`. The values
+can later be loaded for to calculate quantization factors.
+
+#### Quantized mode
+
+```sh
+$ python -m model_modifier.configure_bert_op \
+    --quantization \
+    --no-bfloat16 \
+    --no-calibrate \
+    --quant-factors-path /path/to/quantization/factors/file \
+    /path/to/saved/model/folder
+```
+
+In this mode, the Bert operator will load the previously saved values from `--quant-factors-path` and use them to
+calculate quantization scaling factors, based on the target quantization datatype (currently INT8).
+
+#### BFloat16 mode
+
+```sh
+$ python -m model_modifier.configure_bert_op \
+    --no-quantization \
+    --bfloat16 \
+    --no-calibrate \
+    /path/to/saved/model/folder
+```
+
+In this mode, BFloat16 will be used for floating point computations.
+
+### Other Examples
 
 To set all Bert ops in a saved model to use both quantization and bfloat16:
 ```sh
-$ python -m model_modifier.configure_bert_op --quantization --bfloat16 /path/to/saved/model/folder
+$ python -m model_modifier.configure_bert_op --quantization --bfloat16 --quant-factors-path /path/to/quantization/factors/file /path/to/saved/model/folder
 ```
 
-To set all Bert ops in a frozen model to **not** use quantization and **not** use bfloat16:
-```sh
-$ python -m model_modifier.configure_bert_op --no-quantization --no-bfloat16 /path/to/frozen/model/frozen_model.pb
-```
+If a parameter is not specified, the corresponding attribute will be left unchanged in the model.
 
-Any combination of the above is also valid.
-
-If a quantization or bfloat16 flag is not specified, the corresponding attribute will be left unchanged in the model.
-
-So, if we want to enable quantization, but leave bfloat16 usage as-is in a saved model
-(no matter if it's enabled or disabled):
+So, if we want to disable quantization, but leave bfloat16 usage as-is (no matter if it's enabled or disabled) in a
+saved model:
 ```sh
 $ python -m model_modifier.configure_bert_op --no-quantization /path/to/saved/model/folder
 ```
 
 If we don't want to modify the model graph in place, we can add an output flag to save the graph to a separate file:
 ```sh
-$ python -m model_modifier.configure_bert_op --quantization -o /path/to/copy/of/saved/model/saved_model_copy.pb /path/to/saved/model/folder
+$ python -m model_modifier.configure_bert_op --no-quantization -o /path/to/copy/of/saved/model/saved_model_copy.pb /path/to/saved/model/folder
 ```
 Notice that in this case, even for a saved model, the output path is a .pb file, not a folder - the program makes
 a copy of the saved model's execution graph, but not the variables, assets etc.
