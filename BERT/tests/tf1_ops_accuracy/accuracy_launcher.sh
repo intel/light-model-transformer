@@ -29,7 +29,8 @@ $Python3_EXECUTABLE accuracy.py --model_path=$path_to_model --data_dir=$data_dir
 $Python3_EXECUTABLE -m model_modifier.configure_bert_op \
     $QUANTIZATION \
     $BFLOAT16 \
-    --quant-factors-path=$QUANT_FACTORS_PATH \
+    --no-calibrate \
+    --quant-factors-path=$QUANT_FACTORS_DIR/quant_factors_uncased_L-12_H-768_A-12.txt \
     $path_to_modified_model
 
 printf "${CXX_COMPILER}\t${path_to_modified_model##*/}\t${TF_VERSION}\t${QUANTIZATION}\t${BFLOAT16}\t" >> $out_file

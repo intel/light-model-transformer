@@ -103,8 +103,6 @@ public:
 
             }
 
-            OP_REQUIRES(context, layers == 12, errors::InvalidArgument("Currently only BERT-base with 12 layers is supported."));
-
 
             bert_ctx_builder.NumLayers(layers);
             bert_ctx_builder.HiddenSize(hidden_size);

@@ -2,6 +2,7 @@ import pandas as pd
 import os
 from bs4 import BeautifulSoup
 import matplotlib
+from math import isnan
 
 # gradient colormap from red to green
 colors = ["darkred", "red", "lightsalmon", "white", "lightgreen", "green", "lime"]
@@ -23,10 +24,15 @@ def compare(fname, cfolder, header, results):
     data_n  = pd.read_csv(cfolder + os.sep + fname, sep='\t').dropna().drop_duplicates()
 
     try:
+        # Use 'outer' to include new rows, which were not previously run in nightly
         output = pd.merge(data_n, data_pr,
                         on=header,
-                        how='inner',
+                        how='outer',
                         suffixes=[Nightly_suffix, PR_suffix])
+
+        # Drop NaNs except those in the nightly columns (these are expected due to 'outer' above).
+        # This resutls in new rows being shown, and leaves 'nan%' in columns that show comparison against nightly.
+        output.dropna(inplace=True, subset=[col for col in data_n.columns if Nightly_suffix not in col])
 
         # st = output.style
 
@@ -53,9 +59,18 @@ def compare(fname, cfolder, header, results):
         for tr in res.table.tbody.select('tr'):
             for i in cols:
                 td = tr.select('td')[i]
-                td.attrs['bgcolor'] = color(float(td.text.strip('%')) / 100.0,
-                                            rgmap,
-                                            0.5, 1.5)
+                try:
+                    as_float = float(td.text.strip('%'))
+                    value = as_float / 100.0
+                except ValueError:
+                    value = float('nan')
+
+                if not isnan(value):
+                    field_color = color(value, rgmap, 0.5, 1.5)
+                else:
+                    field_color = matplotlib.colors.rgb2hex((.5, .5, .5))
+                td.attrs['bgcolor'] = field_color
+
     except KeyError:
         print("Something went wrong with merging, saving without comparison data")
         res = BeautifulSoup(data_pr.to_html(index=False), features='html.parser')

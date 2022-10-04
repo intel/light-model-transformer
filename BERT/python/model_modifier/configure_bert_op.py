@@ -40,6 +40,12 @@ def configure_bert_op_nodes(graphs: List[GraphDef], args: argparse.Namespace) ->
         if args.bfloat16 is not None:
             node.attr['NonQuantizableDataType'].type = tf.bfloat16.as_datatype_enum if args.bfloat16 else tf.float32.as_datatype_enum
             # node.attr['UseBFloat16'].type = tf.bfloat16.as_datatype_enum if args.bfloat16 else tf.float.as_datatype_enum
+        if args.hidden_size is not None:
+            node.attr['HiddenSize'].i = args.hidden_size
+        if args.num_attention_heads is not None:
+            node.attr['NumAttentionHeads'].i = args.num_attention_heads
+        if args.intermediate_size is not None:
+            node.attr['IntermediateSize'].i = args.intermediate_size
         if args.max_seq_len is not None:
             node.attr['MaxSequenceLength'].i = args.max_seq_len
         if args.calibrate_quant_factors is not None:
@@ -49,7 +55,9 @@ def configure_bert_op_nodes(graphs: List[GraphDef], args: argparse.Namespace) ->
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Configure attributes of BertOp nodes in a model.')
+        description='Configure attributes of BertOp nodes in a model.', add_help=False)
+
+    parser.add_argument('--help', action='help')
 
     parser.add_argument(
         'model', help='Saved model folder or a frozen model .pb file')
@@ -63,6 +71,15 @@ def main():
                         help='Use BFloat16 in supported operations.')
     parser.add_argument('-B', '--no-bfloat16', dest='bfloat16', action='store_false',
                         help='Do not use BFloat16 in supported operations.')
+
+    parser.add_argument('-h', '--hidden-size', type=int, default=None,
+                        help='Hidden size of the model.')
+
+    parser.add_argument('-a', '--num-attention-heads', type=int, default=None,
+                        help='Number of attention heads of the model.')
+
+    parser.add_argument('-i', '--intermediate-size', type=int, default=None,
+                        help='Intermediate size of the model.')
 
     parser.add_argument('-s', '--max-seq-len', type=int, default=None,
                         help='Max length of the token input sequence.')

@@ -174,7 +174,7 @@ class BertOpTestCase(unittest.TestCase):
 
     def tearDown(self):
         self.reset_tf_runtime()
-    
+
     def reset_tf_runtime(self):
         # Workaround to force TF runtime to clear the kernel cache,
         # idea taken from https://github.com/tensorflow/tensorflow/issues/19671.
@@ -192,13 +192,18 @@ class TestBertOpDefault(BertOpTestCase):
     def test_batch_input(self):
         b = BertOpHelper(lib=self.lib, batch=32)
         b.call()
-    
+
     def test_non_batch_input_tf1(self):
         b = BertOpHelper(lib=self.lib, format=TensorFormat.TF1)
         b.call()
-    
+
     def test_batch_input_tf1(self):
         b = BertOpHelper(lib=self.lib, batch=32, format=TensorFormat.TF1)
+        b.call()
+
+    def test_bert_large(self):
+        b = BertOpHelper(lib=self.lib, max_token_size=512, num_weights=384, hidden_size=1024, num_attention_heads=16,
+                         intermediate_size=4096)
         b.call()
 
 
@@ -306,7 +311,7 @@ class TestBertOpEmbeddings(BertOpTestCase):
         with self.assertRaises(tf.errors.InvalidArgumentError,
                                msg="BertOp should fail for input tensors with fewer than 2 dimensions."):
             b.call()
-    
+
     def test_embedded_invalid_shape(self):
         b = BertOpHelper(lib=self.lib)
         invalid_shape=(b.batch, b.max_token_size + 1, b.hidden_size)
@@ -368,6 +373,8 @@ class TestBertOpLayers(BertOpTestCase):
                                f"NumLayers was {b.layers}, and NumWeights was {len(b.weights)}."):
             b.call()
 
+    @unittest.skip("This test is no longer valid, "
+                   "BertOp now supports models with different numbers of layers.")
     def test_number_of_layers_other_than_12(self):
         for num_layers in [1, 2, 4, 8, 16, 32]:
             with self.subTest(NumLayers=num_layers):
