@@ -20,6 +20,7 @@ static const int LAYERS = 12;
 static const int warmupTimes = 10;
 static int benchmarkTimes = 1000;
 
+static const int maxTokenSize = 128;
 static const int hiddenSize = 768;
 static const int intermediateSize = 3072;
 static const int attentionHeadNum = 12;
@@ -104,11 +105,11 @@ public:
 
 // MiniBatch = 1
 template <bool do_quant, bool do_bf16>
-void benchmark(int tokenSize, float *input, int batch = 1)
+void benchmark(float *input, int batch = 1)
 {
   using dt = dnnl::memory::data_type;
 
-  auto ctx = std::make_shared<BertContext>(128, hiddenSize, intermediateSize, batch, LAYERS, do_quant, do_bf16);
+  auto ctx = std::make_shared<BertContext>(maxTokenSize, hiddenSize, intermediateSize, batch, LAYERS, do_quant, do_bf16);
   std::vector<std::unique_ptr<BertLayer>> bert_layers(LAYERS);
   std::vector<QuantizationFactors> quant_factors = {
       {-10.85244083404541015625, 4.14164829254150390625, -1.6212508678436279296875, 2.18305110931396484375, -64.5349578857421875, 9.17784881591796875, -0.16926576197147369384765625, 12.69039154052734375},
@@ -151,7 +152,7 @@ void benchmark(int tokenSize, float *input, int batch = 1)
 
   for (int i = 0; i < warmupTimes + benchmarkTimes; ++i)
   {
-    dnnl::memory::dims dims{batch * 128, 768};
+    dnnl::memory::dims dims{batch * maxTokenSize, 768};
     auto buffer = dnnl_wrappers::AttachMemory(ctx->dnnl_context.getEngine(), dims, input, false);
 
     auto start = std::chrono::steady_clock::now();
@@ -188,7 +189,6 @@ void benchmark(int tokenSize, float *input, int batch = 1)
 
 int main(int argc, char **argv)
 {
-  int tokenSize = 128;
   int batchSize = 1;
 
 try {
@@ -211,7 +211,7 @@ try {
   }
 
   // Fake input
-  std::vector<float> input(batchSize * tokenSize * hiddenSize);
+  std::vector<float> input(batchSize * maxTokenSize * hiddenSize);
   std::minstd_rand gen; //faster than MT
   std::uniform_real_distribution<float> dist(-0.5f, 0.5f);
   std::generate(input.begin(), input.end(), [&gen, &dist](){ return  dist(gen); });
@@ -233,22 +233,22 @@ try {
   {
     if (do_bfloat16)
     {
-        benchmark<true, true>(tokenSize, input.data(), batchSize);
+        benchmark<true, true>(input.data(), batchSize);
     }
     else
     {
-        benchmark<true, false>(tokenSize, input.data(), batchSize);
+        benchmark<true, false>(input.data(), batchSize);
     }
   }
   else
   {
     if (do_bfloat16)
     {
-        benchmark<false, true>(tokenSize, input.data(), batchSize);
+        benchmark<false, true>(input.data(), batchSize);
     }
     else
     {
-        benchmark<false, false>(tokenSize, input.data(), batchSize);
+        benchmark<false, false>(input.data(), batchSize);
     }
   }
 

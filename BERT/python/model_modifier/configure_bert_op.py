@@ -40,11 +40,12 @@ def configure_bert_op_nodes(graphs: List[GraphDef], args: argparse.Namespace) ->
         if args.bfloat16 is not None:
             node.attr['NonQuantizableDataType'].type = tf.bfloat16.as_datatype_enum if args.bfloat16 else tf.float32.as_datatype_enum
             # node.attr['UseBFloat16'].type = tf.bfloat16.as_datatype_enum if args.bfloat16 else tf.float.as_datatype_enum
+        if args.max_seq_len is not None:
+            node.attr['MaxSequenceLength'].i = args.max_seq_len
         if args.calibrate_quant_factors is not None:
             node.attr['CalibrateQuantFactors'].b = args.calibrate_quant_factors
         if args.quantization_factors_path is not None:
             node.attr['QuantizationFactorsPath'].s = args.quantization_factors_path.encode()
-
 
 def main():
     parser = argparse.ArgumentParser(
@@ -63,8 +64,11 @@ def main():
     parser.add_argument('-B', '--no-bfloat16', dest='bfloat16', action='store_false',
                         help='Do not use BFloat16 in supported operations.')
 
+    parser.add_argument('-s', '--max-seq-len', type=int, default=None,
+                        help='Max length of the token input sequence.')
+
     parser.add_argument('-c', '--calibrate', dest='calibrate_quant_factors', action='store_true', default=None,
-                        help='Enable calibration mode to determine INT8 quantization factors. ' 
+                        help='Enable calibration mode to determine INT8 quantization factors. '
                         'This option can only be used in pure FP32 mode, i.e. --no-bfloat16 --no-quantization.')
     parser.add_argument('-C', '--no-calibrate', dest='calibrate_quant_factors', action='store_false',
                         help='Disable calibration mode.')
@@ -76,6 +80,7 @@ def main():
 
     parser.add_argument('-o', '--output', default=None,
                         help='Location of the output .pb. If not provided, the model will be modified in-place.')
+
 
     args = parser.parse_args()
 

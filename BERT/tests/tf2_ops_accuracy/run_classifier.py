@@ -28,9 +28,9 @@ tfhub_handle_preprocess_default = 'https://tfhub.dev/tensorflow/bert_en_uncased_
 tfhub_handle_encoder_default = 'https://tfhub.dev/tensorflow/bert_en_uncased_L-12_H-768_A-12/4'
 epochs_default = 5
 init_lr_default = 2e-5
+max_seq_len_default = 128
 
-
-def build_classifier_model() -> tf.keras.Model:
+def build_classifier_model(max_seq_len) -> tf.keras.Model:
     preprocessor = hub.load(
         tfhub_handle_preprocess)
 
@@ -39,7 +39,7 @@ def build_classifier_model() -> tf.keras.Model:
     tokenize = hub.KerasLayer(preprocessor.tokenize)
     tokenized_inputs = [tokenize(segment) for segment in text_inputs]
 
-    seq_length = 128  # maxTokenSize of BertOp
+    seq_length = max_seq_len  # maxTokenSize of BertOp
     bert_pack_inputs = hub.KerasLayer(
         preprocessor.bert_pack_inputs,
         arguments=dict(seq_length=seq_length))  # Optional argument.
@@ -51,7 +51,7 @@ def build_classifier_model() -> tf.keras.Model:
     net = outputs['pooled_output']
     net = tf.keras.layers.Dropout(0.1)(net)
     net = tf.keras.layers.Dense(2, activation=None, name='classifier')(net)
-    net = tf.sigmoid(net)
+    net = tf.keras.layers.Softmax()(net)
     return tf.keras.Model(text_inputs, net)
 
 
@@ -69,6 +69,8 @@ if __name__ == '__main__':
                         help=f'How many training epochs to run.')
     parser.add_argument('-l', '--learning-rate', default=init_lr_default, type=float,
                         help=f'Initial learning rate, typically in range [2e-5:5e-5].')
+    parser.add_argument('-s', '--max-seq-len', default=max_seq_len_default, type=int,
+                        help=f'Max sequence length of the input tokens.')
 
     args = parser.parse_args()
 
@@ -87,7 +89,7 @@ if __name__ == '__main__':
 
     print('### Preparing losses and metrics.')
 
-    loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+    loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False)
     metrics = [tf.keras.metrics.SparseCategoricalAccuracy(
         'accuracy', dtype=tf.float32)]
 
@@ -111,7 +113,7 @@ if __name__ == '__main__':
 
     print(f'### Preparing the model: {tfhub_handle_encoder}.')
 
-    classifier_model = build_classifier_model()
+    classifier_model = build_classifier_model(args.max_seq_len)
 
     print('### Compiling the model.')
     classifier_model.compile(optimizer=optimizer,

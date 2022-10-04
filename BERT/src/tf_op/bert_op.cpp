@@ -41,6 +41,7 @@ REGISTER_OP("Bert")
     .Attr("HiddenSize: int = 768")
     .Attr("NumAttentionHeads: int = 12")
     .Attr("IntermediateSize: int = 3072")
+    .Attr("MaxSequenceLength: int = 128")
     .Attr("HiddenAct: {'gelu_tanh'} = 'gelu_tanh'")
     .Attr("CalibrateQuantFactors: bool = false")
     .Attr("QuantizationFactorsPath: string = ''");
@@ -78,6 +79,9 @@ public:
             int intermediate_size;
             OP_REQUIRES_OK(context, context->GetAttr("IntermediateSize", &intermediate_size));
 
+            int max_token_size;
+            OP_REQUIRES_OK(context, context->GetAttr("MaxSequenceLength", &max_token_size));
+
             int num_attention_heads;
             OP_REQUIRES_OK(context, context->GetAttr("NumAttentionHeads", &num_attention_heads));
 
@@ -100,6 +104,7 @@ public:
             }
 
             OP_REQUIRES(context, layers == 12, errors::InvalidArgument("Currently only BERT-base with 12 layers is supported."));
+
 
             bert_ctx_builder.NumLayers(layers);
             bert_ctx_builder.HiddenSize(hidden_size);
@@ -148,27 +153,16 @@ public:
             }
 
 
-
-            // Validate tensor dimensions.
-            // The macros won't work properly if they are in a separate function.
+            // Validate tensor dimensions
+            try
             {
-                OP_REQUIRES(context, (tensor_masks.dims() == 3),
-                    errors::InvalidArgument("The mask tensor must have 3 dimensions."));
-
-                OP_REQUIRES(context, (tensor_embedded.dims() == 2 || tensor_embedded.dims() == 3),
-                            errors::InvalidArgument("The input tensor must have either 2 or 3 dimensions."));
-
-                if (tensor_embedded.dims() == 2)
-                {
-                    OP_REQUIRES(context, (tensor_embedded.dim_size(0) % max_token_size == 0),
-                        errors::InvalidArgument("2D input must be divisible by max_token_size on the first dimension."));
-                }
-
-                // For a 2D tensor: dim_size(1) == ctx->hiddensize,
-                // For 3D tensor: dim_size(2) == ctx->hiddensize
-                int hidden_size_dim_idx = tensor_embedded.dims() - 1;
-                OP_REQUIRES(context, (tensor_embedded.dim_size(hidden_size_dim_idx) == bert_ctx_builder.HiddenSize()),
-                            errors::InvalidArgument("Unexpected hidden size"));
+                using TT = TensorAdapter::TensorType;
+                tensor_adapter.ThrowIfDimsInvalid(tensor_embedded, TT::Embedded);
+                tensor_adapter.ThrowIfDimsInvalid(tensor_masks, TT::Mask);
+            }
+            catch(const std::runtime_error& e)
+            {
+                OP_REQUIRES(context, false, errors::InvalidArgument(e.what()));
             }
 
             // Initialize the BertContext, BertLayers and weights
@@ -316,7 +310,7 @@ private:
         {
             // OP_REQUIRES in Compute() guarantees that
             // tensor.dim_size(0) % max_token_size == 0
-            return tensor.dim_size(0) / max_token_size;
+            return tensor.dim_size(0) / bert_ctx_builder.MaxTokenSize();
         }
 
         // Will not happen due to OP_REQUIRES checks in Compute(),
@@ -545,7 +539,6 @@ private:
         }
     }
 
-    static constexpr int max_token_size = 128;
 
     BertContextBuilder bert_ctx_builder;
     std::shared_ptr<BertContext> ctx;

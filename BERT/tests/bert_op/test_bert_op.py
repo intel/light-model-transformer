@@ -157,6 +157,7 @@ class BertOpHelper(object):
             HiddenSize=self.hidden_size,
             NumAttentionHeads=self.num_attention_heads,
             IntermediateSize=self.intermediate_size,
+            MaxSequenceLength=self.max_token_size,
             HiddenAct=self.hidden_act,
             CalibrateQuantFactors=self.calibrate_quant_factors,
             QuantizationFactorsPath=self.quantization_factors_path
@@ -199,6 +200,20 @@ class TestBertOpDefault(BertOpTestCase):
     def test_batch_input_tf1(self):
         b = BertOpHelper(lib=self.lib, batch=32, format=TensorFormat.TF1)
         b.call()
+
+
+class TestBertOpMaxTokenSize(BertOpTestCase):
+    def test_max_token_size(self):
+        for max_token_size in [64, 128, 256, 512]:
+            with self.subTest(i=max_token_size):
+                b = BertOpHelper(lib=self.lib, max_token_size=max_token_size)
+                b.call()
+                self.reset_tf_runtime()
+
+    def test_invalid_max_token_size(self):
+        b = BertOpHelper(lib=self.lib)
+        b.input=np.zeros((b.batch, b.max_token_size - 1, b.hidden_size), dtype=np.float)
+        self.assertRaises(tf.errors.InvalidArgumentError, b.call)
 
 
 class TestBertOpQuantization(BertOpTestCase):
@@ -296,7 +311,7 @@ class TestBertOpEmbeddings(BertOpTestCase):
         b = BertOpHelper(lib=self.lib)
         invalid_shape=(b.batch, b.max_token_size + 1, b.hidden_size)
         b.input = np.zeros(shape=invalid_shape, dtype=np.float32)
-        self.assertRaises(tf.errors.InternalError, b.call)
+        self.assertRaises(tf.errors.InvalidArgumentError, b.call)
 
 
 class TestBertOpMask(BertOpTestCase):
