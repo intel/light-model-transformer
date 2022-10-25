@@ -106,8 +106,14 @@ def main():
         exit(1)
 
     try:
-        with open(args.output, 'wb') as f:
-            f.write(pattern.SerializePartialToString())
+        # Save in text mode
+        if args.output.endswith('.pbtxt'):
+            with open(args.output, 'w') as f:
+                f.write(str(pattern))
+        # Save in binary mode
+        else:
+            with open(args.output, 'wb') as f:
+                f.write(pattern.SerializePartialToString())
     except IOError as e:
         log.error(f'Error while opening the output file: {e}')
         exit(1)

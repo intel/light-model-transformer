@@ -1,8 +1,13 @@
+from cmath import nan
 import pandas as pd
 import os
 from bs4 import BeautifulSoup
 import matplotlib
 from math import isnan
+
+default_values = {
+    'BERT variant': 'BERT-base'
+}
 
 # gradient colormap from red to green
 colors = ["darkred", "red", "lightsalmon", "white", "lightgreen", "green", "lime"]
@@ -22,6 +27,11 @@ def compare(fname, cfolder, header, results):
 
     data_pr = pd.read_csv(fname, sep='\t').dropna().drop_duplicates()
     data_n  = pd.read_csv(cfolder + os.sep + fname, sep='\t').dropna().drop_duplicates()
+
+    # If we add a new column to the table, we need to reindex the nightly DataFrame so that it has the same header.
+    # The default np.NaN content of the new column may not make sense for the pd.merge call, so we can add an entry to 
+    # the `default_values` dictionary for that particular column and fill the missing values. 
+    data_n = data_n.reindex(columns=data_pr.columns).fillna(default_values)
 
     try:
         # Use 'outer' to include new rows, which were not previously run in nightly
@@ -95,9 +105,9 @@ if __name__ == '__main__':
             results = ['Result'])
     compare(fname   = 'benchmark.csv',
             cfolder = nightly_dir,
-            header  = ['Compiler', 'App', 'TF', 'Quantization', 'BFloat16', 'Batch Size'],
+            header  = ['Compiler', 'App', 'TF', 'BERT variant', 'Quantization', 'BFloat16', 'Batch Size'],
             results = ['Throughput'])
     compare(fname   = 'model_zoo.csv',
             cfolder = nightly_dir,
-            header  = ['Compiler', 'Model', 'TF', 'Quantization', 'BFloat16', 'Batch Size'],
+            header  = ['Compiler', 'Model', 'TF', 'BERT variant', 'Quantization', 'BFloat16', 'Batch Size'],
             results = ['Result', 'Throughput'])
