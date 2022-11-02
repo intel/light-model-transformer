@@ -146,7 +146,8 @@ class PatternExtractor:
 
         fanin_nodes = [node for node in nodes if node.name in input_node_names]
         if (len(input_node_names) != len(fanin_nodes)):
-            difference = set.difference(set(input_node_names), set(fanin_nodes))
+            fanin_node_names = [node.name for node in fanin_nodes]
+            difference = set.difference(set(input_node_names), set(fanin_node_names))
             raise ValueError(f'Could not find nodes {difference} listed as fanin of node {node.name}')
 
         return fanin_nodes
