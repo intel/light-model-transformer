@@ -8,10 +8,11 @@ from model_modifier.recipe_pb2 import Recipe
 
 from tensorflow.core.framework.graph_pb2 import GraphDef
 from tensorflow.core.framework.node_def_pb2 import NodeDef
+from tensorflow.core.framework.function_pb2 import FunctionDef
 
 from tensorflow.python.framework import ops
 
-from typing import Iterable, Dict, MutableSequence, Tuple
+from typing import Iterable, Dict, Union
 
 import logging
 
@@ -31,23 +32,25 @@ class PatternReplacer:
     def replace(self, recipe: Recipe) -> bool:
         self._validate_recipe(recipe)
 
-        # We want to run the algorithm on the main graph and on all the function defs, so we gather them
-        # together in a list. For function defs, node inputs need additional logic, so we also store a boolean
-        # flag to know whether this node collection is a function.
-        node_collections: list[Tuple[str, MutableSequence[NodeDef], bool]] = \
-            [('graph_def', self.__graph_def.node, False)]
-        for func in self.__graph_def.library.function:
-            function_name = str(func.signature.name)
-            nodes = func.node_def
-            is_function = True
-            node_collections.append((function_name, nodes, is_function))
-
         # If the pattern was found in any of the node collections, the replacement was overall successful.
         # A boolean result for each node collection is stored here.
         success_list: list[bool] = []
 
-        for name, node_collection, is_function in node_collections:
-            self.__use_function_naming = is_function
+        graphs: Iterable[Union[GraphDef, FunctionDef]]
+        graphs = [self.__graph_def]
+        graphs.extend(self.__graph_def.library.function)
+
+        graph: Union[GraphDef, FunctionDef]
+        for graph in graphs:
+            if isinstance(graph, FunctionDef):
+                self.__is_function = True
+                name = graph.signature.name
+                node_collection = graph.node_def
+            else:
+                self.__is_function = False
+                name = 'graph_def'
+                node_collection = graph.node
+
             recipe_copy = Recipe()
             recipe_copy.CopyFrom(recipe)
             success, node_mapping = self._locator.locate(recipe_copy.source_pattern, node_collection)
@@ -65,6 +68,9 @@ class PatternReplacer:
                 pattern_nodes, recipe_copy.target_node)
             self._delete_nodes_by_name(pattern_nodes)
             self._add_node_to_graph(recipe_copy.target_node)
+
+            function_outputs: Iterable[str] = graph.ret.values() if self.__is_function else []
+            self._delete_dangling_nodes(function_outputs)
 
             self.log.info(f'Pattern located and replaced in {name}.')
 
@@ -123,7 +129,7 @@ class PatternReplacer:
         return node_name.lstrip('^').split(':', 1)[0]
 
     def _node_to_input_name(self, node: NodeDef) -> str:
-        if not self.__use_function_naming:
+        if not self.__is_function:
             return node.name
         else:
             # Nodes with list outputs are not currently supported.
@@ -151,7 +157,7 @@ class PatternReplacer:
 
     def _attach_target_node_outputs(self, remap_from: Iterable[str], remap_to: NodeDef) -> None:
 
-        if self.__use_function_naming:
+        if self.__is_function:
             # This should be taken from the node's OpDef, but it requires a call
             # to tf.load_op_library() for the BERT op.
             output_arg = 'encoded'
@@ -180,3 +186,19 @@ class PatternReplacer:
                     node.input[i] = remap_name
                     self.log.debug(
                         f'Modified node {node.name}. Input {node.input[i]} remapped to {remap_name}.')
+                        
+    # will not work correctly if there is a chain of dangling nodes
+    def _delete_dangling_nodes(self, function_outputs: Iterable[str] = []) -> None:
+        dangling_nodes: Iterable[NodeDef] = []
+        for node in self.__node_collection:
+            for other_node in self.__node_collection:
+                if node.name in [self._strip_node_name(input) for input in other_node.input]:
+                    break
+
+                if node.name in [self._strip_node_name(output) for output in function_outputs]:
+                    break
+            else:
+                self.log.info(f'Found dangling node {node}.')
+                dangling_nodes.append(node)
+        
+        self._delete_nodes_by_name([node.name for node in dangling_nodes])
