@@ -77,6 +77,7 @@ public:
         // Input mask is an exception to the above, with TF-Hub models duplicating the mask over max_token_size rows.
         allowed_dims.emplace(TensorType::Mask, dims{batch, 1, max_token_size});
         allowed_dims.emplace(TensorType::Mask, dims{batch, max_token_size, max_token_size});
+        allowed_dims.emplace(TensorType::Mask, dims{batch, 1, 1, max_token_size});
 
         allowed_dims.emplace(TensorType::QkvWeight, dims{hidden_size, hidden_size});
         allowed_dims.emplace(TensorType::QkvWeight, dims{hidden_size, num_attention_heads, head_size});

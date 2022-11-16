@@ -417,6 +417,13 @@ private:
             dnnl::memory::desc src_md;
             dims strides;
 
+            auto last_dim = mask.dim_size(mask.dims()-1); 
+            int stride_0 = 1;
+            for (int64 dim = 1; dim <= (mask.dims()-1); dim++)
+            {
+                stride_0 *= mask.dim_size(dim);
+            }
+
             // The mask can have dimensions {batch, 1, maxTokenSize}, or {batch, maxTokenSize, maxTokenSize}.
             // In the latter case, the mask for each input in the batch is duplicated maxTokenSize times.
             // A memory descriptor with dimensions and strides as below will work for both cases, skipping over any
@@ -424,19 +431,19 @@ private:
             switch(mask.dtype())
             {
                 case DT_FLOAT:
-                    strides = {mask.dim_size(1) * mask.dim_size(2), 1};
-                    src_md = dnnl::memory::desc{{mask.dim_size(0), mask.dim_size(2)}, dt::f32, strides};
+                    strides = {stride_0, 1};
+                    src_md = dnnl::memory::desc{{mask.dim_size(0), last_dim}, dt::f32, strides};
                     break;
                 case DT_INT32:
-                    strides = {mask.dim_size(1) * mask.dim_size(2), 1};
-                    src_md = dnnl::memory::desc{{mask.dim_size(0), mask.dim_size(2)}, dt::s32, strides};
+                    strides = {stride_0, 1};
+                    src_md = dnnl::memory::desc{{mask.dim_size(0), last_dim}, dt::s32, strides};
                     break;
                 case DT_INT64:
                     // We use 2 as the last stride to ignore the 4 most significant bytes of the int64 mask values.
                     // This way we only take the least significant 4 bytes of each value and treat them as int32.
                     // This only works on little-endian systems.
-                    strides = {mask.dim_size(1) * mask.dim_size(2) * 2, 2};
-                    src_md = dnnl::memory::desc{{mask.dim_size(0), mask.dim_size(2)}, dt::s32, strides};
+                    strides = {stride_0 * 2, 2};
+                    src_md = dnnl::memory::desc{{mask.dim_size(0), last_dim}, dt::s32, strides};
                     break;
                 default:
                     throw std::runtime_error("Unsupported mask data type");
