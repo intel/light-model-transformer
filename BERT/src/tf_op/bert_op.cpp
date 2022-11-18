@@ -72,18 +72,23 @@ public:
             
             OP_REQUIRES(context, num_weights % BertContext::tensors_per_layer == 0,
                 errors::InvalidArgument("NumWeights must be a multiple of BertLayer::weights_per_layer"));
+            OP_REQUIRES(context, num_weights > 0, errors::InvalidArgument("NumWeights must be greater than 0."));
 
             int hidden_size;
             OP_REQUIRES_OK(context, context->GetAttr("HiddenSize", &hidden_size));
+            OP_REQUIRES(context, hidden_size > 0, errors::InvalidArgument("HiddenSize must be greater than 0."));
 
             int intermediate_size;
             OP_REQUIRES_OK(context, context->GetAttr("IntermediateSize", &intermediate_size));
+            OP_REQUIRES(context, intermediate_size > 0, errors::InvalidArgument("IntermediateSize must be greater than 0."));
 
             int max_token_size;
             OP_REQUIRES_OK(context, context->GetAttr("MaxSequenceLength", &max_token_size));
+            OP_REQUIRES(context, max_token_size > 0, errors::InvalidArgument("MaxSequenceLength must be greater than 0."));
 
             int num_attention_heads;
             OP_REQUIRES_OK(context, context->GetAttr("NumAttentionHeads", &num_attention_heads));
+            OP_REQUIRES(context, num_attention_heads > 0, errors::InvalidArgument("NumAttentionHeads must be greater than 0."));
 
             OP_REQUIRES(context, num_attention_heads * BertContext::head_size == hidden_size,
                 errors::InvalidArgument("Constraint not met: HiddenSize = NumAttentionHead * HeadSize"));
