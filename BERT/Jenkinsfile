@@ -115,7 +115,8 @@ def buildStages(List env) {
                         set -e
                         set -o pipefail # Ensure pytest exit code is forwarded through tee
                         source /opt/intel/oneapi/setvars.sh intel64
-                        export BERT_OP_PATH=${WORKSPACE}/build/src/tf_op/libBertOp.so
+                        export BERT_OP_LIB=${WORKSPACE}/build/src/tf_op/libBertOp.so
+                        export PYTHONPATH=\${PYTHONPATH}:${WORKSPACE}/python
                         mkdir -p test_results
                         python -m pytest --junitxml test_results/${test_results}.xml ${WORKSPACE}/tests/bert_op | tee test_results/${test_results}.log
                     """
