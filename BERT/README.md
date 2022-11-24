@@ -4,7 +4,7 @@ BERT model optimization is an open-source optimization for BERT language process
 The optimization is based on [Bfloat16 Optimization Boosts Alibaba Cloud BERT Model Performance](https://www.intel.com/content/www/us/en/artificial-intelligence/posts/alibaba-blog.html).  
 Furthermore, it utilizes  [Intel® oneAPI Deep Neural Network Library (oneDNN)](https://github.com/oneapi-src/oneDNN) to obtain additional performance gains.  
 BERT model optimization is split into two parts, model modifier, which modifies the model to use a custom operator and a custom operator which utilizes oneDNN.  
-Currently only models built using tensorflow 1.x and 2.x are supported.
+Currently only models built using tensorflow 1.x and 2.x are supported. We provide the way to modify some models from TFhub and google-research/bert. If you wish to modify your custom tensorflow model, we provide the step by step guide how to do it. Please check our [README](util/README.md) page.
 
 ## Table of contents
 
