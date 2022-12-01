@@ -294,7 +294,7 @@ for(Map ct_axis in ct_axes) {
                 checkout scm
                 docker.image("${IMAGE_NAME}:${TF_VERSION}").inside("--cpuset-cpus=0-10 --init -v ${jenkins_data}:/data") {
                     buildStages(ct_axisEnv).call()
-                    if (params.NIGHTLY != null || CXX_COMPILER == "icpc") {
+                    if (CXX_COMPILER == "icpc") {
                         for(Map rt_axis in rt_axes) {
                             List rt_axisEnv = rt_axis.collect { k, v ->
                                 "${k}=${v}"
