@@ -8,14 +8,31 @@
 #include "dnnl.hpp"
 
 #include <limits>
+#include <iomanip>
 #include <iostream>
 
 struct MinMax {
     float min = std::numeric_limits<float>::max();
     float max = std::numeric_limits<float>::lowest();
 
-    void Update(const dnnl::memory& tensor)
+    void Update(const dnnl::memory& mem)
     {
+        // reorder to plain mem
+        auto tensor = [](dnnl::memory src_mem) -> dnnl::memory {
+            auto src_md = src_mem.get_desc();
+            dnnl::memory::desc dst_md{src_md.dims(), dnnl::memory::data_type::f32, dnnl::memory::dims{}};
+            if (dst_md == src_md) {
+                return src_mem;
+            }
+
+            auto eng = src_mem.get_engine();
+            dnnl::stream stm{eng};
+            dnnl::memory dst_mem{dst_md, eng};
+            dnnl::reorder{src_mem, dst_mem}.execute(stm, src_mem, dst_mem);
+            stm.wait();
+            return dst_mem;
+        }(mem);
+
         if (tensor.get_desc().data_type() != dnnl::memory::data_type::f32)
         {
             throw std::invalid_argument("MinMax requires tensors for quantization factor calibration to have "
@@ -34,7 +51,10 @@ struct MinMax {
 
 std::ostream& operator<< (std::ostream& os, const MinMax& v)
 {
-    os << v.min << ' ' << v.max;
+    const auto prec = std::numeric_limits<float>::max_digits10;
+    const auto old_prec = os.precision(prec);
+    os << std::setw(prec + 2) << v.min << std::setw(prec + 2) << v.max;
+    os.precision(old_prec);
     return os;
 }
 
