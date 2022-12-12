@@ -166,7 +166,7 @@ def testStages(List env) {
                         export Python3_EXECUTABLE=/usr/bin/python
                         export PYTHONPATH=\${PYTHONPATH}:${WORKSPACE}/python              # Need model modifier on PYTHONPATH
                         export TFDS_DATA_DIR=/data/tfds_data
-                        export QUANT_FACTORS_DIR=${WORKSPACE}/jenkins_resources
+                        export QUANT_FACTORS_DIR=${WORKSPACE}/jenkins_resources/tf\${TF_MAJOR}
 
                         source /opt/intel/oneapi/setvars.sh intel64
                         ${WORKSPACE}/tests/tf\${TF_MAJOR}_ops_accuracy/accuracy_launcher.sh \${base_dir}
@@ -198,7 +198,8 @@ def testStages(List env) {
                                 set -e
                                 export PYTHONPATH=\${PYTHONPATH}:${WORKSPACE}/model_zoo/models/language_modeling/tensorflow/bert_large/inference
                                 export PYTHONPATH=\${PYTHONPATH}:${WORKSPACE}/python
-                                export QUANT_FACTORS_PATH=${WORKSPACE}/jenkins_resources/${QUANT_FILES[MODEL]}
+                                export TF_MAJOR=${TF_VERSION.replaceFirst(/(\d+)\..*/, '$1')}
+                                export QUANT_FACTORS_PATH=${WORKSPACE}/jenkins_resources/tf\${TF_MAJOR}/${QUANT_FILES[MODEL]}
                                 OUTPUT_DIR=\$(mktemp -d)
                                 GLUE_DIR=/data/tf1/download_glue/glue_data
                                 BERT_BASE_DIR=${BASE_MODEL_DIRS[MODEL]}
