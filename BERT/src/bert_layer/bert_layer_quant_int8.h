@@ -39,6 +39,7 @@ class BertLayer
 
 public:
     static constexpr int head_size = BertContext::head_size;
+    static constexpr float outputQuantizationAccuracyFactor = 3.f;
 
     // ctx->hiddenSize 768 Hidden layer neurons, number of hidden units
     // ctx->intermediateSize 3072 feed-forward/filter size dimension 4*ctx->hiddenSize 
@@ -69,14 +70,20 @@ public:
 
         const auto quantization_type = ctx->QuantizationType();
 
-        qkv_SrcScale = computeQuantizationScale(quantization_type, quant_factors_.qkv.min, quant_factors_.qkv.max);
+        const auto qkvSrcType = UnsignedDataType(quantization_type);
+        qkv_SrcScale = computeQuantizationScale(qkvSrcType, quant_factors_.qkv.min, quant_factors_.qkv.max);
+        qkv_SrcShift = (qkvSrcType == dt::u8)
+            ? std::round(-quant_factors_.qkv.min * qkv_SrcScale)
+            : 0.f;
 
-        OpDataTypes op_data_types{quantization_type, quantization_type, dt::f32, dt::f32};
+        OpDataTypes op_data_types{qkvSrcType, quantization_type, dt::f32, dt::f32};
         std::tie(
             queryWeight,
             queryBias,
             queryMatMul_
         ) = BuildInnerProduct(op_data_types, m, n, k, qkv_SrcScale, _queryWeight, _queryBias);
+
+        queryBias = CachedDataSource(shiftBias(n, k, queryWeight, queryBias, qkv_SrcShift));
 
         std::tie(
             keyWeight,
@@ -84,11 +91,15 @@ public:
             keyMatMul_
         ) = BuildInnerProduct(op_data_types, m, n, k, qkv_SrcScale, _keyWeight, _keyBias);
 
+        keyBias = CachedDataSource(shiftBias(n, k, keyWeight, keyBias, qkv_SrcShift));
+
         std::tie(
             valueWeight,
             valueBias,
             valueMatMul_
         ) = BuildInnerProduct(op_data_types, m, n, k, qkv_SrcScale, _valueWeight, _valueBias);
+
+        valueBias = CachedDataSource(shiftBias(n, k, valueWeight, valueBias, qkv_SrcShift));
 
         // Batch MatMul1 with bias and scale construction
         batchMatMul1ScaleBias_ = BuildBatchMatMul1WithScaleBias();
@@ -106,13 +117,21 @@ public:
         n = ctx->hiddenSize; // B.Cols();
         k = ctx->hiddenSize; // A.Cols() == B.Rows();
 
-        attentionout_SrcScale = computeQuantizationScale(quantization_type, quant_factors_.attention_out.min, quant_factors_.attention_out.max);
+        const auto attSrctype = UnsignedDataType(quantization_type);
+        attentionout_SrcScale = computeQuantizationScale(attSrctype, quant_factors_.attention_out.min, quant_factors_.attention_out.max);
 
+        attentionout_SrcShift = (attSrctype == dt::u8)
+            ? std::round(-quant_factors_.attention_out.min * attentionout_SrcScale)
+            : 0.f;
+
+        op_data_types = {attSrctype, quantization_type, dt::f32, dt::f32};
         std::tie(
             attentionOutputWeight,
             attentionOutputBias,
             attentionMatMul_
         ) = BuildInnerProduct(op_data_types, m, n, k, attentionout_SrcScale, _attentionOutputWeight, _attentionOutputBias, BuildAttrs().Sum());
+
+        attentionOutputBias = CachedDataSource(shiftBias(n, k, attentionOutputWeight, attentionOutputBias, attentionout_SrcShift));
 
         // Norm1
         const auto gamma1_mem = ReshapeMemory(_gamma1, {1, ctx->hiddenSize});
@@ -130,33 +149,59 @@ public:
         n = ctx->intermediateSize; // B.Cols();
         k = ctx->hiddenSize; // A.Cols() == B.Rows();
 
-        intermediate_SrcScale = computeQuantizationScale(quantization_type, quant_factors_.intermediate.min,quant_factors_.intermediate.max);
+        const auto intermediateSrcType = UnsignedDataType(quantization_type);
+        intermediate_SrcScale = computeQuantizationScale(intermediateSrcType, quant_factors_.intermediate.min,quant_factors_.intermediate.max);
+
+        intermediate_SrcShift = (intermediateSrcType == dt::u8)
+            ? std::round(-quant_factors_.intermediate.min * intermediate_SrcScale)
+            : 0.f;
 
         // Apply source quantization scale for output matmul to intermediate matmul result
-        const auto intermediate_PostScale = computeQuantizationScale(quantization_type, quant_factors_.intermediate_post.min, quant_factors_.intermediate_post.max);
+        intermediateBufType = UnsignedDataType(ctx->QuantizationType());
+        auto intermediate_PostScale = computeQuantizationScale(intermediateBufType, quant_factors_.intermediate_post.min, quant_factors_.intermediate_post.max);
 
-        op_data_types = {quantization_type, quantization_type, dt::f32, quantization_type};
+        // Disable output MatMul quantization if scaling exceeds accuracy factor
+        if (intermediate_PostScale < outputQuantizationAccuracyFactor) {
+            intermediateBufType = ctx->FloatType();
+            intermediate_PostScale = 1.f;
+        }
+
+        // TODO(rfsaliev) std::round(), std::ceil() or std::floor()?
+        float intermediatePostShift = (intermediateBufType == dt::u8) 
+            ? std::round(-quant_factors_.intermediate_post.min * intermediate_PostScale)
+            : 0.f;
+
+        using algo = dnnl::algorithm;
+        BuildAttrs intermeadiateAttrs;
+        intermeadiateAttrs.Eltwise(algo::eltwise_gelu, 0.f, 0.f, intermediate_PostScale);
+
+        if (intermediatePostShift != 0.f) {
+            intermeadiateAttrs.Eltwise(algo::eltwise_linear, 1.f, intermediatePostShift);
+        }
+
+        op_data_types = {intermediateSrcType, quantization_type, dt::f32, intermediateBufType};
         std::tie(
             intermediateWeight,
             intermediateBias,
             intermediateMatMul_
         ) = BuildInnerProduct(op_data_types, m, n, k, intermediate_SrcScale, _intermediateWeight, _intermediateBias,
-                        BuildAttrs().Eltwise(dnnl::algorithm::eltwise_gelu_erf, 0.f, 0.f, intermediate_PostScale));
+                        intermeadiateAttrs);
+
+        intermediateBias = CachedDataSource(shiftBias(n, k, intermediateWeight, intermediateBias, intermediate_SrcShift));
 
         // output dense weight and bias
         m = ctx->maxTokenSize; // A.Rows();
         n = ctx->hiddenSize; // B.Cols();
         k = ctx->intermediateSize; // A.Cols() == B.Rows();
 
-        const auto out_WScale = computeQuantizationScale(quantization_type, _outputWeight);
-        const auto out_BiasScale = intermediate_PostScale * out_WScale;
-
-        op_data_types = {quantization_type, quantization_type, dt::f32, dt::f32};
+        op_data_types = {intermediateBufType, SignedDataType(intermediateBufType), dt::f32, dt::f32};
         std::tie(
             outputWeight,
             outputBias,
             outputMatMul_
-        ) = BuildInnerProduct(op_data_types, m, n, k, out_WScale, out_BiasScale, _outputWeight, _outputBias, BuildAttrs().Sum());
+        ) = BuildInnerProduct(op_data_types, m, n, k, intermediate_PostScale, _outputWeight, _outputBias, BuildAttrs().Sum());
+
+        outputBias = CachedDataSource(shiftBias(n, k, outputWeight, outputBias, intermediatePostShift));
 
         // Output Norm
         const auto gamma2_mem = ReshapeMemory(_gamma2, {1, ctx->hiddenSize});
@@ -183,7 +228,7 @@ public:
             quant_factors_.qkv.Update(inputBufferMem);
         }
 
-        auto qkv_SrcData = ScaledData(inputBufferMem, qkv_SrcScale);
+        auto qkv_SrcData = ScaledCachedData(inputBufferMem, qkv_SrcScale, qkv_SrcShift);
 
         // Query
         queryMatMul_->Compute(stm, qkv_SrcData, queryWeight, queryBias, ctx->query);
@@ -220,7 +265,7 @@ public:
         batchMatMul2_->Compute(stm, batchMatMul2_QKData, batchMatMul2_VData, batchMatMul2_BData, batchMatMul2_DMem);
 
         // Attention Output
-        auto attentionOut_SrcData = ScaledData(ctx->resultBuffer1, attentionout_SrcScale);
+        auto attentionOut_SrcData = ScaledData(ctx->resultBuffer1, attentionout_SrcScale, attentionout_SrcShift);
         attentionMatMul_->Compute(stm, attentionOut_SrcData, attentionOutputWeight, attentionOutputBias, inputBufferMem);
 
         // Norm 1
@@ -228,18 +273,18 @@ public:
         Norm1_->Compute(stm, inputBufferData, gamma1, beta1, inputBufferMem);
 
         // Intermediate with Erf
-        auto intermediate_SrcData = ScaledData(inputBufferMem, intermediate_SrcScale);
-        intermediateMatMul_->Compute(stm, intermediate_SrcData, intermediateWeight, intermediateBias, ctx->intermediateBuffer);
+        auto intermediate_SrcData = ScaledData(inputBufferMem, intermediate_SrcScale, intermediate_SrcShift);
+        intermediateMatMul_->Compute(stm, intermediate_SrcData, intermediateWeight, intermediateBias, ctx->intermediateBuffer(intermediateBufType));
 
         if (ctx->calibrate_quant_factors)
         {
             quant_factors_.attention_out.Update(ctx->resultBuffer1);
             quant_factors_.intermediate.Update(inputBufferMem);
-            quant_factors_.intermediate_post.Update(ctx->intermediateBuffer);
+            quant_factors_.intermediate_post.Update(ctx->intermediateBuffer(intermediateBufType));
         }
 
         // Output MatMul with Sum
-        auto output_SrcData = DataSource(ctx->intermediateBuffer);
+        auto output_SrcData = DataSource(ctx->intermediateBuffer(intermediateBufType));
 
         outputMatMul_->Compute(stm, output_SrcData, outputWeight, outputBias, inputBufferMem);
 
@@ -253,67 +298,74 @@ public:
     }
 
 private:
-
-
-    template <class T,
-              typename = typename std::enable_if<
-                                    std::is_arithmetic<T>::value
-                                    || std::is_same<T, bfloat16>::value
-                                  >::type>
-    struct is_quantizable 
-        : std::integral_constant<
-            bool,
-            std::is_integral<T>::value> {};
-
-    template <class... Args>
-    float computeQuantizationScale(dt data_type, Args&&... args)
+    float computeQuantizationScale(dt data_type, float min, float max)
     {
         switch(data_type)
         {
             case dt::s8:
-                return computeQuantizationScale<int8_t>(std::forward<Args>(args)...);
+                return static_cast<float>(std::numeric_limits<int8_t>::max()) / std::max(std::abs(min), std::abs(max));
             case dt::u8:
-                return computeQuantizationScale<uint8_t>(std::forward<Args>(args)...);
+                return static_cast<float>(std::numeric_limits<uint8_t>::max()) / std::abs(max - min);
             case dt::s32:
-                return computeQuantizationScale<int32_t>(std::forward<Args>(args)...);
+                return static_cast<float>(std::numeric_limits<int32_t>::max()) / std::max(std::abs(min), std::abs(max));
             default:
                 return dnnl_wrappers::BuildAttrs::noScale;
         }
     }
 
-    template <class T>
-    typename std::enable_if_t<is_quantizable<T>::value, float>
-    static constexpr computeQuantizationScale(const float* p, size_t size) {
-        // std::max_element is not constexpr until c++17
-        return static_cast<float>(std::numeric_limits<T>::max())
-               / *std::max_element(p, p+size, [](const float& a, const float& b) { return std::abs(a) < std::abs(b); });
+    float computeQuantizationScale(dt data_type, const float* p, size_t size)
+    {
+        auto min_max = std::minmax_element(p, p+size);
+        return computeQuantizationScale(data_type, *min_max.first, *min_max.second);
     }
 
-    template <class T>
-    typename std::enable_if_t<is_quantizable<T>::value, float>
-    static constexpr computeQuantizationScale(float min, float max) {
-        return static_cast<float>(std::numeric_limits<T>::max()) / std::abs(max - min);
-        // TODO: (krzychut) clarify if smaller range would be enough:
-        // return static_cast<float>(std::numeric_limits<T>::max()) / std::max(std::abs(min), std::abs(max));
-    }
-
-    // For dynamic quantization case
-    // TODO(rfsaliev) use dnnl::reduction to compute max value
-    template <class T>
-    typename std::enable_if_t<is_quantizable<T>::value, float>
-    computeQuantizationScale(const dnnl::memory& mem) {
+    float computeQuantizationScale(dt data_type, const dnnl::memory& mem) {
         assert(mem.get_desc().data_type() == dnnl::memory::data_type::f32);
         ctx->dnnl_context.getEngineStream().wait();
-        return computeQuantizationScale<T>(MemoryAccessor<float>(mem).Data(), mem.get_desc().get_size() / sizeof(float));
+        MemoryAccessor<float> mem_acc(mem);
+        return computeQuantizationScale(data_type, mem_acc.Data(), mem.get_desc().get_size() / sizeof(float));
     }
 
-    // Fake method just to test above templates
-    void computeQScaleTest() {
+    // Shift bias for source zero-point case with formula:
+    // let: weight[N, K], bias[N]
+    // bias[n] -= reduce_sum(weight, K)[n] * zero_point
+    dnnl::memory shiftBias(int n, int k, dnnl_wrappers::DataSource& weight, dnnl_wrappers::DataSource& bias, float zero_point) {
         using namespace dnnl_wrappers;
-        static_assert(computeQuantizationScale<int8_t>(0.f, 254.f) == .5f, "");
+        using reduce = dnnl::reduction;
+        using algo = dnnl::algorithm;
+        using dt = dnnl::memory::data_type;
+
+        const auto quantization_type = ctx->QuantizationType();
+        auto& stm = ctx->dnnl_context.getEngineStream();
+
+        if (zero_point == 0.f || quantization_type == dt::f32) {
+            return bias.GetData(stm, {{n}, dt::f32, dnnl::memory::dims{}});
+        }
+
+        auto src = weight.GetData(stm, {{n, k}, quantization_type, dnnl::memory::dims{}});
+
+        auto bias_mem = bias.GetData(stm, {{n}, dt::s32, dnnl::memory::dims{}});
+        auto dst = ReshapeMemory(bias_mem, {n, 1});
+
+        reduce prim{
+            reduce::primitive_desc{
+                reduce::desc{algo::reduction_sum, src.get_desc(), dst.get_desc(), 0.f, 0.f},
+                BuildAttrs().Eltwise(algo::eltwise_linear, -zero_point).Sum(),
+                ctx->dnnl_context.getEngine()
+            }
+        };
+
+        prim.execute(
+            stm,
+            {
+                {DNNL_ARG_SRC, src},
+                {DNNL_ARG_DST, dst},
+            }
+        );
+        stm.wait();
+
+        return bias_mem;
     }
-
-
 
     std::tuple<
         dnnl_wrappers::CachedDataSource,        // weight_data
@@ -490,8 +542,12 @@ private:
     std::unique_ptr<dnnl_wrappers::LayerNorm> Norm2_;
 
     float qkv_SrcScale;
+    float qkv_SrcShift;
     float attentionout_SrcScale;
+    float attentionout_SrcShift;
     float intermediate_SrcScale;
+    float intermediate_SrcShift;
+    dnnl::memory::data_type intermediateBufType;
 
     QuantizationFactors quant_factors_;
 };

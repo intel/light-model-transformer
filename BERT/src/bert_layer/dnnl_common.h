@@ -33,6 +33,26 @@ template <> struct DnnlDataType<uint8_t> {
     static constexpr dnnl::memory::data_type value = dnnl::memory::data_type::u8;
 };
 
+dnnl::memory::data_type UnsignedDataType(dnnl::memory::data_type t) {
+    using dt = dnnl::memory::data_type;
+    switch(t) {
+    case dt::s8:
+        return dt::u8;
+    default:
+        return t;
+    }
+}
+
+dnnl::memory::data_type SignedDataType(dnnl::memory::data_type t) {
+    using dt = dnnl::memory::data_type;
+    switch(t) {
+    case dt::u8:
+        return dt::s8;
+    default:
+        return t;
+    }
+}
+
 // TODO(rfsaliev) Replace MemoryAccessor with dnnl::reorder functionality to read-write dnnl::memory
 template <class T>
 class MemoryAccessor {

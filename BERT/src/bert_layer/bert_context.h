@@ -45,7 +45,10 @@ public:
         , key  {dnnl::memory::desc{{batch * maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
         , value{dnnl::memory::desc{{batch * maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
         , resultBuffer1{dnnl::memory::desc{{batch * maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
-        , intermediateBuffer{dnnl::memory::desc{{batch * maxTokenSize, intermediateSize}, QuantizationType(), dims{}}, dnnl_context.getEngine()}
+        , intermediateBuffers_{{
+            QuantizationType(),
+            dnnl::memory{dnnl::memory::desc{{batch * maxTokenSize, intermediateSize}, QuantizationType(), dims{}}, dnnl_context.getEngine()}
+          }}
         , qk_resultBuffer{dnnl::memory::desc{{batch, hiddenSize / head_size, maxTokenSize, maxTokenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
     {
         assert(hiddenSize % head_size == 0);
@@ -55,7 +58,20 @@ public:
 
     dnnl::memory::data_type FloatType() const { return use_bfloat16 ? dt::bf16 : dt::f32; }
 
+    dnnl::memory& intermediateBuffer(dnnl::memory::data_type atype) {
+        for (auto& p : intermediateBuffers_) {
+            if (p.first == atype) {
+                return p.second;
+            }
+        }
+        // no buffer found for dt - construct, add and return
+        intermediateBuffers_.emplace_back(atype, dnnl::memory{dnnl::memory::desc{{batch_ * maxTokenSize, intermediateSize}, atype, dims{}}, dnnl_context.getEngine()});
+        return intermediateBuffers_.back().second;
+    }
 
+    dnnl::memory& intermediateBuffer() {
+        return intermediateBuffer(QuantizationType());
+    }
 
     int maxTokenSize;
     int hiddenSize;
@@ -74,8 +90,10 @@ public:
     dnnl::memory value;
     // Buffer like the dimesion of 128x768
     dnnl::memory resultBuffer1;
+private:
     // Buffer to store the result of intermediate
-    dnnl::memory intermediateBuffer;
+    std::vector<std::pair<dt, dnnl::memory>> intermediateBuffers_;
+public:
     // Store the BatchMatMul result of query and key
     dnnl::memory qk_resultBuffer;
 };

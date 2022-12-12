@@ -117,12 +117,12 @@ dnnl::memory ReLayoutMemory(const dnnl::memory& mem, dnnl::memory::desc layout) 
     return dnnl::memory{layout, mem.get_engine(), mem.get_data_handle()};
 }
 
-DataSource ScaledData(const dnnl::memory& mem, float scale) {
-        return DataSource(mem, BuildAttrs().Scale(scale));
+DataSource ScaledData(const dnnl::memory& mem, float scale, float zero_point = 0.f) {
+        return DataSource(mem, BuildAttrs().Scale(scale).ZeroPoint(zero_point));
 }
 
-CachedDataSource ScaledCachedData(const dnnl::memory& mem, float scale) {
-    return  CachedDataSource(mem, BuildAttrs().Scale(scale));
+CachedDataSource ScaledCachedData(const dnnl::memory& mem, float scale, float zero_point = 0.f) {
+    return  CachedDataSource(mem, BuildAttrs().Scale(scale).ZeroPoint(zero_point));
 }
 
 } // namespace dnnl_wrappers
