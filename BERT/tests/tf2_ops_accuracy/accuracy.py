@@ -2,16 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-import os
 import time
 
 import numpy as np
 
 import tensorflow as tf
-import tensorflow_datasets as tfds
-import tensorflow_text as text  # must be imported to load preprocessor ops
+import tensorflow_text # Dependency of tf
+from datasets import load_dataset
+from transformers import BertTokenizer
 
-import sys
 import argparse
 
 if __name__ == '__main__':
@@ -23,10 +22,11 @@ if __name__ == '__main__':
                         type=str, help='Path to the BERT model.')
     parser.add_argument('op_library', metavar='op-library',
                         type=str, help='Path to the .so containing the BertOp.')
-    parser.add_argument('--out-file', type=str, help='Path to the output .csv file.')
-
+    parser.add_argument('-g', '--hugging_face', type=str, default=None, 
+                        help='Name of Hugging Face model.')
     parser.add_argument('-v', '--verbose', dest='verbose', action='store_true',
                         help='Print progress while running and a list of every label-prediction pair.')
+    parser.add_argument('--out-file', type=str, help='Path to the output .csv file.')
 
     args = parser.parse_args()
 
@@ -36,13 +36,29 @@ if __name__ == '__main__':
 
     print('### Preparing dataset.')
 
-    dataset, info = tfds.load('glue/mrpc', with_info=True,
-                              # It's small, load the whole dataset
-                              batch_size=-1)
+    dataset = load_dataset("glue","mrpc")
 
-    train_dataset = dataset['train']
     validation_dataset = dataset['validation']
-    test_dataset = dataset['test']
+    
+    sentence1_key = "sentence1"
+    sentence2_key = "sentence2"
+    
+    total_samples = len(validation_dataset['label'])
+    labels = validation_dataset['label'][:total_samples]
+    
+    if args.hugging_face is not None:
+        tokenizer = BertTokenizer.from_pretrained(args.hugging_face)
+        
+        def preprocess_function(examples):
+            args = (examples[sentence1_key], examples[sentence2_key])
+            result = tokenizer(*args, padding="max_length", max_length=128, return_tensors='tf')
+            return result
+       
+        validation_dataset = validation_dataset.map(preprocess_function, batched=True)
+        val_dict = validation_dataset.to_dict()
+        
+        for key in ["attention_mask", "input_ids", "token_type_ids"]:
+            val_dict[key] = tf.constant(val_dict[key], dtype=tf.int32)
 
     print('### Loading the model.')
 
@@ -50,40 +66,26 @@ if __name__ == '__main__':
 
     print('### Testing the model.')
 
-    total_samples = len(validation_dataset['label'])
-    labels = validation_dataset['label'][:total_samples]
-
-    # Batch mode - load all samples as a single batch.
     start = time.time()
-    res = model([
-            validation_dataset['sentence1'][:total_samples],
-            validation_dataset['sentence2'][:total_samples]
-    ])
+
+    if args.hugging_face is not None:
+        res = model.signatures["serving_default"](attention_mask=val_dict["attention_mask"], input_ids=val_dict["input_ids"], token_type_ids=val_dict["token_type_ids"])
+        res = res["logits"].numpy()
+    else:
+        res = model([
+            validation_dataset[sentence1_key][:total_samples],
+            validation_dataset[sentence2_key][:total_samples]
+        ])
+        res = res.numpy()
+    
     end = time.time()
 
-    results = np.argmax(res.numpy(), axis=1)
-    
-    # Non-batch mode - force batch size 1.
-    # start = time.time()
-    # results = []
-    # for i in range(total_samples):
-    #     res = model([
-    #         validation_dataset['sentence1'][i:i+1],
-    #         validation_dataset['sentence2'][i:i+1]
-    #     ])
-    #     res = np.argmax(res.numpy())
-    #     results.append(res)
-
-    #     if args.verbose:
-    #         s = f'Testing: {i :>3} / {total_samples : <3}'
-    #         print(f"{s}{' ' * (os.get_terminal_size().columns - len(s))}",
-    #             end='\r', flush=True)
-    # end = time.time()
-
+    results = np.argmax(res, axis=1)
+        
     if args.verbose:
         print(f"{'Label' : <10} | {'Response' : <10}")
         for i in range(total_samples):
-            print(f'{labels[i] : <10} | {results[i] : <10}  {res[i,:]}')
+            print(f'{labels[i] : <10} | {results[i] : <10}  {res[i]}')
 
     correct = np.sum(results == labels)
     accuracy = correct / total_samples

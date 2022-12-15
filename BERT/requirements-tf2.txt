@@ -5,3 +5,5 @@ tensorflow-datasets
 tensorflow-hub
 tf-models-official
 pytest
+transformers
+datasets
