@@ -41,7 +41,7 @@ List rt_axes = getMatrixAxes(run_time_axes).findAll { axis ->
 def prepareReports() {
     return {
         stage("Prepare Reports") {
-            node(null) {
+            node(params.HOST) {
                 dir("build") {
                     sh 'printf "Compiler\tModel\tTF\tQuantization\tBFloat16\tCorrect/Total\tResult\n" > accuracy.csv'
                     stash includes: 'accuracy.csv', name: 'accuracy'
@@ -60,7 +60,7 @@ def prepareReports() {
 def publishReports() {
     return {
         stage("Publish Reports") {
-            node(null) {
+            node(params.HOST) {
                 dir("build") {
                     sh "rm -rf nightly"
                     copyArtifacts filter: '*csv', projectName: 'main.bert/Nightly', selector: lastSuccessful(), target: 'nightly'
@@ -291,7 +291,7 @@ for(Map ct_axis in ct_axes) {
 
     tasks[ct_axisEnv.join(', ')] = { ->
         withEnv(ct_axisEnv) {
-            node(null) {
+            node(params.HOST) {
                 checkout scm
                 docker.image("${IMAGE_NAME}:${TF_VERSION}").inside("--cpuset-cpus=0-10 --init -v ${jenkins_data}:/data") {
                     buildStages(ct_axisEnv).call()
@@ -311,7 +311,7 @@ for(Map ct_axis in ct_axes) {
 
 stage("Matrix builds") {
     prepareReports().call()
-    node(null) {
+    node(params.HOST) {
         checkout scm
         buildDockerfile(ct_axes.collect{tf -> tf['TF_VERSION']}.unique())
     }
