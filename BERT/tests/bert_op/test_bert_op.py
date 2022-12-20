@@ -66,7 +66,7 @@ class TestBertOpMaxTokenSize(BertOpTestCase):
 
     def test_invalid_max_token_size(self):
         b = BertOpHelper(lib=self.lib)
-        b.input=np.zeros((b.batch, b.max_token_size - 1, b.hidden_size), dtype=np.float)
+        b.input=np.zeros((b.batch, b.max_token_size - 1, b.hidden_size), dtype=np.float64)
         self.assertRaises(tf.errors.InvalidArgumentError, b.call)
 
 
