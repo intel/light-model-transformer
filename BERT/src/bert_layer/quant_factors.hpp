@@ -70,21 +70,53 @@ struct QuantizationFactors
     MinMax qkv;
     MinMax attention_out;
     MinMax intermediate;
-    MinMax intermediate_post;
+    MinMax output;
 
     static float From(dnnl::memory& mem, dnnl::stream& stm);
 };
 
 std::ostream& operator<< (std::ostream& os, const QuantizationFactors& v)
 {
-    os << v.qkv << ' ' << v.attention_out << ' ' << v.intermediate << ' ' << v.intermediate_post;
+    os << v.qkv << ' ' << v.attention_out << ' ' << v.intermediate << ' ' << v.output;
     return os;
 }
 
 std::istream& operator>> (std::istream& is, QuantizationFactors& v)
 {
-    is >> v.qkv >> v.attention_out >> v.intermediate >> v.intermediate_post;
+    is >> v.qkv >> v.attention_out >> v.intermediate >> v.output;
     return is;
+}
+
+
+float computeQuantizationScale(dnnl::memory::data_type data_type, float min, float max)
+{
+    using dt = dnnl::memory::data_type;
+    switch(data_type)
+    {
+        case dt::s8:
+            return static_cast<float>(std::numeric_limits<int8_t>::max()) / std::max(std::abs(min), std::abs(max));
+        case dt::u8:
+            return static_cast<float>(std::numeric_limits<uint8_t>::max()) / std::abs(max - min);
+        case dt::s32:
+            return static_cast<float>(std::numeric_limits<int32_t>::max()) / std::max(std::abs(min), std::abs(max));
+        default:
+            return dnnl_wrappers::BuildAttrs::noScale;
+    }
+}
+
+float computeQuantizationScale(dnnl::memory::data_type data_type, const float* p, size_t size)
+{
+    auto min_max = std::minmax_element(p, p+size);
+    return computeQuantizationScale(data_type, *min_max.first, *min_max.second);
+}
+
+float computeQuantizationScale(dnnl::memory::data_type data_type, const dnnl::memory& mem, dnnl::stream wait_stream = dnnl::stream{}) {
+    assert(mem.get_desc().data_type() == dnnl::memory::data_type::f32);
+    if (wait_stream) {
+        wait_stream.wait();
+    }
+    MemoryAccessor<float> mem_acc(mem);
+    return computeQuantizationScale(data_type, mem_acc.Data(), mem.get_desc().get_size() / sizeof(float));
 }
 
 #endif

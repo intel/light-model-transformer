@@ -61,45 +61,23 @@ public:
         using namespace dnnl_wrappers;
         quant_factors_ = _quant_factors;
 
+        // Default operation types
+        const auto src_type    = ctx->UnsignedQuantizationType();
+        const auto weight_type = ctx->SignedQuantizationType();
+        // TODO(rfsaliev) use ctx->FloatType() for BF16 support
+        const auto bias_type   = dt::f32;
+        const auto dst_type    = dt::f32;
+        const auto op_data_types = OpDataTypes{src_type, weight_type, bias_type, dst_type};
+
         auto& eng = ctx->dnnl_context.getEngine();
 
         // query, key and value sizes are same
         auto m = ctx->maxTokenSize; // A.Rows();
         auto n = ctx->hiddenSize; // B.Cols();
         auto k = ctx->hiddenSize; // A.Cols() == B.Rows();
-
-        const auto quantization_type = ctx->QuantizationType();
-
-        const auto qkvSrcType = UnsignedDataType(quantization_type);
-        qkv_SrcScale = computeQuantizationScale(qkvSrcType, quant_factors_.qkv.min, quant_factors_.qkv.max);
-        qkv_SrcShift = (qkvSrcType == dt::u8)
-            ? std::round(-quant_factors_.qkv.min * qkv_SrcScale)
-            : 0.f;
-
-        OpDataTypes op_data_types{qkvSrcType, quantization_type, dt::f32, dt::f32};
-        std::tie(
-            queryWeight,
-            queryBias,
-            queryMatMul_
-        ) = BuildInnerProduct(op_data_types, m, n, k, qkv_SrcScale, _queryWeight, _queryBias);
-
-        queryBias = CachedDataSource(shiftBias(n, k, queryWeight, queryBias, qkv_SrcShift));
-
-        std::tie(
-            keyWeight,
-            keyBias,
-            keyMatMul_
-        ) = BuildInnerProduct(op_data_types, m, n, k, qkv_SrcScale, _keyWeight, _keyBias);
-
-        keyBias = CachedDataSource(shiftBias(n, k, keyWeight, keyBias, qkv_SrcShift));
-
-        std::tie(
-            valueWeight,
-            valueBias,
-            valueMatMul_
-        ) = BuildInnerProduct(op_data_types, m, n, k, qkv_SrcScale, _valueWeight, _valueBias);
-
-        valueBias = CachedDataSource(shiftBias(n, k, valueWeight, valueBias, qkv_SrcShift));
+        queryIPDesc = BuildInnerProduct(op_data_types, m, n, k, quant_factors_.qkv, _queryWeight, _queryBias);
+        keyIPDesc   = BuildInnerProduct(op_data_types, m, n, k, quant_factors_.qkv,   _keyWeight,   _keyBias);
+        valueIPDesc = BuildInnerProduct(op_data_types, m, n, k, quant_factors_.qkv, _valueWeight, _valueBias);
 
         // Batch MatMul1 with bias and scale construction
         batchMatMul1ScaleBias_ = BuildBatchMatMul1WithScaleBias();
@@ -112,26 +90,15 @@ public:
         // Batch MatMul2 construction
         batchMatMul2_ = BuildBatchMatMul2();
 
-        // Weights for attention output
+        // Attention Output MatMul construction
         m = ctx->maxTokenSize; // A.Rows();
         n = ctx->hiddenSize; // B.Cols();
         k = ctx->hiddenSize; // A.Cols() == B.Rows();
-
-        const auto attSrctype = UnsignedDataType(quantization_type);
-        attentionout_SrcScale = computeQuantizationScale(attSrctype, quant_factors_.attention_out.min, quant_factors_.attention_out.max);
-
-        attentionout_SrcShift = (attSrctype == dt::u8)
-            ? std::round(-quant_factors_.attention_out.min * attentionout_SrcScale)
-            : 0.f;
-
-        op_data_types = {attSrctype, quantization_type, dt::f32, dt::f32};
-        std::tie(
-            attentionOutputWeight,
-            attentionOutputBias,
-            attentionMatMul_
-        ) = BuildInnerProduct(op_data_types, m, n, k, attentionout_SrcScale, _attentionOutputWeight, _attentionOutputBias, BuildAttrs().Sum());
-
-        attentionOutputBias = CachedDataSource(shiftBias(n, k, attentionOutputWeight, attentionOutputBias, attentionout_SrcShift));
+        attentionOutIPDesc = BuildInnerProduct(op_data_types,
+                                               m, n, k,
+                                               quant_factors_.attention_out,
+                                               _attentionOutputWeight, _attentionOutputBias,
+                                               BuildAttrs().Sum());
 
         // Norm1
         const auto gamma1_mem = ReshapeMemory(_gamma1, {1, ctx->hiddenSize});
@@ -139,69 +106,54 @@ public:
         const auto beta1_mem = ReshapeMemory(_beta1, {1, ctx->hiddenSize});
         beta1 = DataSource(beta1_mem);
 
-        auto ln1_md = attentionMatMul_->PrimDesc().dst_desc();
+        auto ln1_md = attentionOutIPDesc.prim->PrimDesc().dst_desc();
         const float epsilon = 9.999999960041972e-13;
         const dnnl::normalization_flags flags = dnnl::normalization_flags::use_scale | dnnl::normalization_flags::use_shift;
         Norm1_ = std::make_unique<LayerNorm>(eng, ln1_md, epsilon, flags);
 
-        // intermediate weight and bias
-        m = ctx->maxTokenSize; // A.Rows();
-        n = ctx->intermediateSize; // B.Cols();
-        k = ctx->hiddenSize; // A.Cols() == B.Rows();
+        // - At first, construct Output MatMul - its scale/shift will be used later
 
-        const auto intermediateSrcType = UnsignedDataType(quantization_type);
-        intermediate_SrcScale = computeQuantizationScale(intermediateSrcType, quant_factors_.intermediate.min,quant_factors_.intermediate.max);
+        // Compute intermediate buffer type depending on accuracy factor
+        intermediateBufType = src_type;
+        auto outputWeightType  = weight_type;
 
-        intermediate_SrcShift = (intermediateSrcType == dt::u8)
-            ? std::round(-quant_factors_.intermediate.min * intermediate_SrcScale)
-            : 0.f;
-
-        // Apply source quantization scale for output matmul to intermediate matmul result
-        intermediateBufType = UnsignedDataType(ctx->QuantizationType());
-        auto intermediate_PostScale = computeQuantizationScale(intermediateBufType, quant_factors_.intermediate_post.min, quant_factors_.intermediate_post.max);
-
-        // Disable output MatMul quantization if scaling exceeds accuracy factor
-        if (intermediate_PostScale < outputQuantizationAccuracyFactor) {
-            intermediateBufType = ctx->FloatType();
-            intermediate_PostScale = 1.f;
+        // Force float output MatMul if scaling less than accuracy factor
+        const auto output_SrcScale = computeQuantizationScale(intermediateBufType, quant_factors_.output.min, quant_factors_.output.max);
+        if (output_SrcScale < outputQuantizationAccuracyFactor) {
+            // TODO(rfsaliev) use ctx->FloatType() for BF16 support
+            intermediateBufType = outputWeightType = dt::f32;
         }
-
-        // TODO(rfsaliev) std::round(), std::ceil() or std::floor()?
-        float intermediatePostShift = (intermediateBufType == dt::u8) 
-            ? std::round(-quant_factors_.intermediate_post.min * intermediate_PostScale)
-            : 0.f;
-
-        using algo = dnnl::algorithm;
-        BuildAttrs intermeadiateAttrs;
-        intermeadiateAttrs.Eltwise(algo::eltwise_gelu, 0.f, 0.f, intermediate_PostScale);
-
-        if (intermediatePostShift != 0.f) {
-            intermeadiateAttrs.Eltwise(algo::eltwise_linear, 1.f, intermediatePostShift);
-        }
-
-        op_data_types = {intermediateSrcType, quantization_type, dt::f32, intermediateBufType};
-        std::tie(
-            intermediateWeight,
-            intermediateBias,
-            intermediateMatMul_
-        ) = BuildInnerProduct(op_data_types, m, n, k, intermediate_SrcScale, _intermediateWeight, _intermediateBias,
-                        intermeadiateAttrs);
-
-        intermediateBias = CachedDataSource(shiftBias(n, k, intermediateWeight, intermediateBias, intermediate_SrcShift));
 
         // output dense weight and bias
         m = ctx->maxTokenSize; // A.Rows();
         n = ctx->hiddenSize; // B.Cols();
         k = ctx->intermediateSize; // A.Cols() == B.Rows();
+        outputIPDesc = BuildInnerProduct({intermediateBufType, outputWeightType, bias_type, dst_type},
+                                         m, n, k,
+                                         _quant_factors.output,
+                                         _outputWeight,
+                                         _outputBias,
+                                         BuildAttrs().Sum());
 
-        op_data_types = {intermediateBufType, SignedDataType(intermediateBufType), dt::f32, dt::f32};
-        std::tie(
-            outputWeight,
-            outputBias,
-            outputMatMul_
-        ) = BuildInnerProduct(op_data_types, m, n, k, intermediate_PostScale, _outputWeight, _outputBias, BuildAttrs().Sum());
+        // - At second, construct Intermediate MatMul
 
-        outputBias = CachedDataSource(shiftBias(n, k, outputWeight, outputBias, intermediatePostShift));
+        // Apply source quantization scale of the Output MatMul to Intermediate MatMul result
+        using algo = dnnl::algorithm;
+        auto intermediateAttrs = BuildAttrs().Eltwise(algo::eltwise_gelu, 0.f, 0.f, outputIPDesc.scale);
+
+        if (outputIPDesc.shift != 0.f) {
+            intermediateAttrs.Eltwise(algo::eltwise_linear, 1.f, outputIPDesc.shift);
+        }
+
+        // intermediate weight and bias
+        m = ctx->maxTokenSize; // A.Rows();
+        n = ctx->intermediateSize; // B.Cols();
+        k = ctx->hiddenSize; // A.Cols() == B.Rows();
+        intermediateIPDesc = BuildInnerProduct({src_type, weight_type, bias_type, intermediateBufType},
+                                                m, n, k,
+                                                _quant_factors.intermediate,
+                                                _intermediateWeight, _intermediateBias,
+                                                intermediateAttrs);
 
         // Output Norm
         const auto gamma2_mem = ReshapeMemory(_gamma2, {1, ctx->hiddenSize});
@@ -209,7 +161,7 @@ public:
         const auto beta2_mem = ReshapeMemory(_beta2, {1, ctx->hiddenSize});
         beta2 = DataSource(beta2_mem);
 
-        auto ln2_md = outputMatMul_->PrimDesc().dst_desc();
+        auto ln2_md = outputIPDesc.prim->PrimDesc().dst_desc();
         Norm2_ = std::make_unique<LayerNorm>(eng, ln2_md, epsilon, flags);
     }
 
@@ -228,16 +180,16 @@ public:
             quant_factors_.qkv.Update(inputBufferMem);
         }
 
-        auto qkv_SrcData = ScaledCachedData(inputBufferMem, qkv_SrcScale, qkv_SrcShift);
+        auto qkv_SrcData = queryIPDesc.ScaledCachedData(inputBufferMem);
 
         // Query
-        queryMatMul_->Compute(stm, qkv_SrcData, queryWeight, queryBias, ctx->query);
+        queryIPDesc.Compute(stm, qkv_SrcData, ctx->query);
 
         // Key
-        keyMatMul_->Compute(stm, qkv_SrcData, keyWeight, keyBias, ctx->key);
+        keyIPDesc.Compute(stm, qkv_SrcData, ctx->key);
 
         // Value
-        valueMatMul_->Compute(stm, qkv_SrcData, valueWeight, valueBias, ctx->value);
+        valueIPDesc.Compute(stm, qkv_SrcData, ctx->value);
 
 
         // Batch MatMul1 with bias and scale
@@ -265,28 +217,27 @@ public:
         batchMatMul2_->Compute(stm, batchMatMul2_QKData, batchMatMul2_VData, batchMatMul2_BData, batchMatMul2_DMem);
 
         // Attention Output
-        auto attentionOut_SrcData = ScaledData(ctx->resultBuffer1, attentionout_SrcScale, attentionout_SrcShift);
-        attentionMatMul_->Compute(stm, attentionOut_SrcData, attentionOutputWeight, attentionOutputBias, inputBufferMem);
+        auto attentionOut_SrcData = attentionOutIPDesc.ScaledData(ctx->resultBuffer1);
+        attentionOutIPDesc.Compute(stm, attentionOut_SrcData, inputBufferMem);
 
         // Norm 1
         auto inputBufferData = DataSource(inputBufferMem);
         Norm1_->Compute(stm, inputBufferData, gamma1, beta1, inputBufferMem);
 
         // Intermediate with Erf
-        auto intermediate_SrcData = ScaledData(inputBufferMem, intermediate_SrcScale, intermediate_SrcShift);
-        intermediateMatMul_->Compute(stm, intermediate_SrcData, intermediateWeight, intermediateBias, ctx->intermediateBuffer(intermediateBufType));
+        auto intermediate_SrcData = intermediateIPDesc.ScaledData(inputBufferMem);
+        intermediateIPDesc.Compute(stm, intermediate_SrcData, ctx->intermediateBuffer(intermediateBufType));
 
         if (ctx->calibrate_quant_factors)
         {
             quant_factors_.attention_out.Update(ctx->resultBuffer1);
             quant_factors_.intermediate.Update(inputBufferMem);
-            quant_factors_.intermediate_post.Update(ctx->intermediateBuffer(intermediateBufType));
+            quant_factors_.output.Update(ctx->intermediateBuffer(intermediateBufType));
         }
 
         // Output MatMul with Sum
         auto output_SrcData = DataSource(ctx->intermediateBuffer(intermediateBufType));
-
-        outputMatMul_->Compute(stm, output_SrcData, outputWeight, outputBias, inputBufferMem);
+        outputIPDesc.Compute(stm, output_SrcData, inputBufferMem);
 
         // Output Norm
         Norm2_->Compute(stm, inputBufferData, gamma2, beta2, inputBufferMem);
@@ -298,34 +249,6 @@ public:
     }
 
 private:
-    float computeQuantizationScale(dt data_type, float min, float max)
-    {
-        switch(data_type)
-        {
-            case dt::s8:
-                return static_cast<float>(std::numeric_limits<int8_t>::max()) / std::max(std::abs(min), std::abs(max));
-            case dt::u8:
-                return static_cast<float>(std::numeric_limits<uint8_t>::max()) / std::abs(max - min);
-            case dt::s32:
-                return static_cast<float>(std::numeric_limits<int32_t>::max()) / std::max(std::abs(min), std::abs(max));
-            default:
-                return dnnl_wrappers::BuildAttrs::noScale;
-        }
-    }
-
-    float computeQuantizationScale(dt data_type, const float* p, size_t size)
-    {
-        auto min_max = std::minmax_element(p, p+size);
-        return computeQuantizationScale(data_type, *min_max.first, *min_max.second);
-    }
-
-    float computeQuantizationScale(dt data_type, const dnnl::memory& mem) {
-        assert(mem.get_desc().data_type() == dnnl::memory::data_type::f32);
-        ctx->dnnl_context.getEngineStream().wait();
-        MemoryAccessor<float> mem_acc(mem);
-        return computeQuantizationScale(data_type, mem_acc.Data(), mem.get_desc().get_size() / sizeof(float));
-    }
-
     // Shift bias for source zero-point case with formula:
     // let: weight[N, K], bias[N]
     // bias[n] -= reduce_sum(weight, K)[n] * zero_point
@@ -335,14 +258,14 @@ private:
         using algo = dnnl::algorithm;
         using dt = dnnl::memory::data_type;
 
-        const auto quantization_type = ctx->QuantizationType();
+        const auto weight_quant_type = ctx->SignedQuantizationType();
         auto& stm = ctx->dnnl_context.getEngineStream();
 
-        if (zero_point == 0.f || quantization_type == dt::f32) {
+        if (zero_point == 0.f || weight_quant_type == dt::f32) {
             return bias.GetData(stm, {{n}, dt::f32, dnnl::memory::dims{}});
         }
 
-        auto src = weight.GetData(stm, {{n, k}, quantization_type, dnnl::memory::dims{}});
+        auto src = weight.GetData(stm, {{n, k}, weight_quant_type, dnnl::memory::dims{}});
 
         auto bias_mem = bias.GetData(stm, {{n}, dt::s32, dnnl::memory::dims{}});
         auto dst = ReshapeMemory(bias_mem, {n, 1});
@@ -367,49 +290,45 @@ private:
         return bias_mem;
     }
 
-    std::tuple<
-        dnnl_wrappers::CachedDataSource,        // weight_data
-        dnnl_wrappers::CachedDataSource,        // bias_data
-        std::unique_ptr<dnnl_wrappers::MatMul>  // MatMul
-    > BuildMatMul(OpDataTypes data_types, int m, int n, int k,
-                  float weight_scale, float bias_scale,
-                  const dnnl::memory& weight, const dnnl::memory& bias,
-                  dnnl_wrappers::BuildAttrs attrs = {}) {
+    struct InnerProductInferenceDesc {
+        dnnl_wrappers::CachedDataSource weight;
+        dnnl_wrappers::CachedDataSource bias;
+        std::unique_ptr<dnnl_wrappers::InnerProduct> prim;
+        float scale;
+        float shift;
+
+        void Compute(dnnl::stream& stm, dnnl_wrappers::DataSource& src, dnnl::memory& dst_memory) {
+            prim->Compute(stm, src, weight, bias, dst_memory);
+        }
+
+        dnnl_wrappers::DataSource ScaledData(const dnnl::memory& mem) {
+            return dnnl_wrappers::ScaledData(mem, scale, shift);
+        }
+
+        dnnl_wrappers::CachedDataSource ScaledCachedData(const dnnl::memory& mem) {
+            return dnnl_wrappers::ScaledCachedData(mem, scale, shift);
+        }
+    };
+
+    InnerProductInferenceDesc BuildInnerProduct(const OpDataTypes& data_types,
+                                                int m, int n, int k,
+                                                const MinMax& min_max,
+                                                const dnnl::memory& weight,
+                                                const dnnl::memory& bias,
+                                                dnnl_wrappers::BuildAttrs attrs = {}) {
             using namespace dnnl_wrappers;
+            InnerProductInferenceDesc ipConfig;
+
+            ipConfig.scale = computeQuantizationScale(data_types.src_dt, min_max.min, min_max.max);
+            // TODO(rfsaliev) std::round(), std::ceil() or std::floor()?
+            ipConfig.shift = (data_types.src_dt == dnnl::memory::data_type::u8)
+                ? std::round(-min_max.min * ipConfig.scale)
+                : 0.f;
+
             auto& eng = ctx->dnnl_context.getEngine();
 
-            const auto dst_scale = 1.f / bias_scale;
-
-            const auto weight_mem = ReshapeMemory(weight, {1, k, n});
-            const auto bias_mem = ReshapeMemory(bias, {1, 1, n});
-
-            return std::make_tuple(
-                ScaledCachedData(weight_mem, weight_scale), ScaledCachedData(bias_mem, bias_scale),
-                std::make_unique<MatMul>(MakeMatMul(eng, ctx->batch_, m, n, k, data_types.src_dt, data_types.weight_dt,
-                                                    data_types.bias_dt, data_types.dst_dt, attrs.Scale(dst_scale))));
-    }
-
-    std::tuple<
-        dnnl_wrappers::CachedDataSource,        // weight_data
-        dnnl_wrappers::CachedDataSource,        // bias_data
-        std::unique_ptr<dnnl_wrappers::MatMul>  // MatMul
-    > BuildMatMul(OpDataTypes data_types, int m, int n, int k, float src_scale, const dnnl::memory& weight, const dnnl::memory& bias, dnnl_wrappers::BuildAttrs attrs = {}) {
-            const auto weight_scale = computeQuantizationScale(data_types.weight_dt, weight);
-            const auto bias_scale = src_scale * weight_scale;
-            return BuildMatMul(data_types, m, n, k, weight_scale, bias_scale, weight, bias, attrs);
-    }
-
-    std::tuple<
-        dnnl_wrappers::CachedDataSource,        // weight_data
-        dnnl_wrappers::CachedDataSource,        // bias_data
-        std::unique_ptr<dnnl_wrappers::InnerProduct>  // InnerProduct
-    > BuildInnerProduct(OpDataTypes data_types, int m, int n, int k,
-                  float weight_scale, float bias_scale,
-                  const dnnl::memory& weight, const dnnl::memory& bias,
-                  dnnl_wrappers::BuildAttrs attrs = {}) {
-            using namespace dnnl_wrappers;
-            auto& eng = ctx->dnnl_context.getEngine();
-
+            const auto weight_scale = computeQuantizationScale(data_types.weight_dt, weight, ctx->dnnl_context.getEngineStream());
+            const auto bias_scale = ipConfig.scale * weight_scale;
             const auto dst_scale = 1.f / bias_scale;
 
             // Note(rfsaliev): InnerProduct expects memory format 'OI' which is transposition to Matmul 'KN'
@@ -418,20 +337,14 @@ private:
             const auto weight_mem = AttachMemory(eng, {n, k}, (float*)weight.get_data_handle(), true);
             const auto bias_mem = ReshapeMemory(bias, {n});
 
-            return std::make_tuple(ScaledCachedData(weight_mem, weight_scale), ScaledCachedData(bias_mem, bias_scale),
-                                   std::make_unique<InnerProduct>(MakeInnerProduct(
-                                       eng, ctx->batch_, m, n, k, data_types.src_dt, data_types.weight_dt,
-                                       data_types.bias_dt, data_types.dst_dt, attrs.Scale(dst_scale))));
-    }
+            ipConfig.weight = ScaledCachedData(weight_mem, weight_scale);
+            auto scaled_bias = ScaledData(bias_mem, bias_scale);
+            ipConfig.bias = CachedDataSource(shiftBias(n, k, ipConfig.weight, scaled_bias, ipConfig.shift));
 
-    std::tuple<
-        dnnl_wrappers::CachedDataSource,        // weight_data
-        dnnl_wrappers::CachedDataSource,        // bias_data
-        std::unique_ptr<dnnl_wrappers::InnerProduct>  // MatMul
-    > BuildInnerProduct(OpDataTypes data_types, int m, int n, int k, float src_scale, const dnnl::memory& weight, const dnnl::memory& bias, dnnl_wrappers::BuildAttrs attrs = {}) {
-            const auto weight_scale = computeQuantizationScale(data_types.weight_dt , weight);
-            const auto bias_scale = src_scale * weight_scale;
-            return BuildInnerProduct(data_types, m, n, k, weight_scale, bias_scale, weight, bias, attrs);
+            ipConfig.prim   = std::make_unique<InnerProduct>(MakeInnerProduct(
+                                       eng, ctx->batch_, m, n, k, data_types.src_dt, data_types.weight_dt,
+                                       data_types.bias_dt, data_types.dst_dt, attrs.Scale(dst_scale)));
+            return ipConfig;
     }
 
     std::unique_ptr<dnnl_wrappers::MatMul> BuildBatchMatMul1WithScaleBias() {
@@ -503,9 +416,9 @@ private:
     std::shared_ptr<BertContext> ctx;
 
     // Separate query, key, value weight, bias and MatMul op
-    dnnl_wrappers::CachedDataSource queryWeight;
-    dnnl_wrappers::CachedDataSource queryBias;
-    std::unique_ptr<dnnl_wrappers::InnerProduct> queryMatMul_;
+    InnerProductInferenceDesc queryIPDesc;
+    InnerProductInferenceDesc keyIPDesc;
+    InnerProductInferenceDesc valueIPDesc;
 
     std::unique_ptr<dnnl_wrappers::MatMul> batchMatMul1ScaleBias_;
 
@@ -513,40 +426,19 @@ private:
 
     std::unique_ptr<dnnl_wrappers::MatMul> batchMatMul2_;
 
-    dnnl_wrappers::CachedDataSource keyWeight;
-    dnnl_wrappers::CachedDataSource keyBias;
-    std::unique_ptr<dnnl_wrappers::InnerProduct> keyMatMul_;
-
-    dnnl_wrappers::CachedDataSource valueWeight;
-    dnnl_wrappers::CachedDataSource valueBias;
-    std::unique_ptr<dnnl_wrappers::InnerProduct> valueMatMul_;
-
-    dnnl_wrappers::CachedDataSource attentionOutputWeight;
-    dnnl_wrappers::CachedDataSource attentionOutputBias;
-    std::unique_ptr<dnnl_wrappers::InnerProduct> attentionMatMul_;
+    InnerProductInferenceDesc attentionOutIPDesc;
 
     dnnl_wrappers::DataSource gamma1;
     dnnl_wrappers::DataSource beta1;
     std::unique_ptr<dnnl_wrappers::LayerNorm> Norm1_;
 
-    dnnl_wrappers::CachedDataSource intermediateWeight;
-    dnnl_wrappers::CachedDataSource intermediateBias;
-    std::unique_ptr<dnnl_wrappers::InnerProduct> intermediateMatMul_;
-
-    dnnl_wrappers::CachedDataSource outputWeight;
-    dnnl_wrappers::CachedDataSource outputBias;
-    std::unique_ptr<dnnl_wrappers::InnerProduct> outputMatMul_;
+    InnerProductInferenceDesc intermediateIPDesc;
+    InnerProductInferenceDesc outputIPDesc;
 
     dnnl_wrappers::DataSource gamma2;
     dnnl_wrappers::DataSource beta2;
     std::unique_ptr<dnnl_wrappers::LayerNorm> Norm2_;
 
-    float qkv_SrcScale;
-    float qkv_SrcShift;
-    float attentionout_SrcScale;
-    float attentionout_SrcShift;
-    float intermediate_SrcScale;
-    float intermediate_SrcShift;
     dnnl::memory::data_type intermediateBufType;
 
     QuantizationFactors quant_factors_;

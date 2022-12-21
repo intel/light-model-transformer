@@ -45,20 +45,24 @@ public:
         , key  {dnnl::memory::desc{{batch * maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
         , value{dnnl::memory::desc{{batch * maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
         , resultBuffer1{dnnl::memory::desc{{batch * maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
-        , intermediateBuffers_{{
-            QuantizationType(),
-            dnnl::memory{dnnl::memory::desc{{batch * maxTokenSize, intermediateSize}, QuantizationType(), dims{}}, dnnl_context.getEngine()}
-          }}
         , qk_resultBuffer{dnnl::memory::desc{{batch, hiddenSize / head_size, maxTokenSize, maxTokenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
+        , intermediateBuffers_{{
+            UnsignedQuantizationType(),
+            dnnl::memory{dnnl::memory::desc{{batch * maxTokenSize, intermediateSize}, UnsignedQuantizationType(), dims{}}, dnnl_context.getEngine()}
+          }}
     {
         assert(hiddenSize % head_size == 0);
     }
 
-    dnnl::memory::data_type QuantizationType() const { return use_quantization ? dt::s8 : dt::f32; }
+    dnnl::memory::data_type   SignedQuantizationType() const { return use_quantization ? dt::s8 : dt::f32; }
+    dnnl::memory::data_type UnsignedQuantizationType() const { return use_quantization ? dt::u8 : dt::f32; }
 
     dnnl::memory::data_type FloatType() const { return use_bfloat16 ? dt::bf16 : dt::f32; }
 
+    // rfsaliev: there are just 1 or 2 elements expected in intermediateBuffers_
+    // std::map or std::unordered_map are too 'heavy' for such simple case
     dnnl::memory& intermediateBuffer(dnnl::memory::data_type atype) {
+        // just do not want to use std::find_if()
         for (auto& p : intermediateBuffers_) {
             if (p.first == atype) {
                 return p.second;
@@ -67,10 +71,6 @@ public:
         // no buffer found for dt - construct, add and return
         intermediateBuffers_.emplace_back(atype, dnnl::memory{dnnl::memory::desc{{batch_ * maxTokenSize, intermediateSize}, atype, dims{}}, dnnl_context.getEngine()});
         return intermediateBuffers_.back().second;
-    }
-
-    dnnl::memory& intermediateBuffer() {
-        return intermediateBuffer(QuantizationType());
     }
 
     int maxTokenSize;
@@ -90,12 +90,11 @@ public:
     dnnl::memory value;
     // Buffer like the dimesion of 128x768
     dnnl::memory resultBuffer1;
+    // Store the BatchMatMul result of query and key
+    dnnl::memory qk_resultBuffer;
 private:
     // Buffer to store the result of intermediate
     std::vector<std::pair<dt, dnnl::memory>> intermediateBuffers_;
-public:
-    // Store the BatchMatMul result of query and key
-    dnnl::memory qk_resultBuffer;
 };
 
 
