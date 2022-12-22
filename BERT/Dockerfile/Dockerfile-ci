@@ -45,6 +45,8 @@ RUN wget https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCT
     apt-get install -y \
         intel-oneapi-tbb \
         intel-oneapi-tbb-devel \
+        intel-oneapi-mkl \
+        intel-oneapi-mkl-devel \
         intel-oneapi-compiler-dpcpp-cpp-and-cpp-classic
 
 SHELL ["/bin/bash", "-c"]
@@ -64,6 +66,20 @@ RUN source /opt/intel/oneapi/setvars.sh intel64 && \
           -G "Ninja" && \
     ninja dnnl install
 
+# setting the id's used by Jenkins
+ARG username=jenkins
+ARG userid=115
+ARG usergroup=119
+RUN useradd -ms /bin/bash --uid ${userid} ${username}
+RUN groupmod -o -g ${usergroup} ${username}
+RUN usermod -a -G ${usergroup} ${username}
+
+
+
+
+
+FROM base as bert-op-tensorflow
+
 ARG PYTHON_VERSION=3.6
 # NOTE: tf 1.15 doesn't support officially python versions newer that 3.6
 RUN add-apt-repository ppa:deadsnakes/ppa -y && \
@@ -76,15 +92,7 @@ RUN add-apt-repository ppa:deadsnakes/ppa -y && \
         --no-install-recommends && \
     ln -s /usr/bin/python${PYTHON_VERSION} /usr/bin/python
 
-# setting the id's used by Jenkins
-ARG username=jenkins
-ARG userid=115
-ARG usergroup=119
-RUN useradd -ms /bin/bash --uid ${userid} ${username}
-RUN groupmod -o -g ${usergroup} ${username}
-RUN usermod -a -G ${usergroup} ${username}
 USER ${username}
-
 ARG TF_VERSION=1.15.4
 ARG TF_requirements=requirements-tf1.txt
 COPY ${TF_requirements} /tmp/requirements.txt
@@ -97,21 +105,22 @@ ARG cache_bomb
 RUN echo $cache_bomb # From this point on, cache is invalidated and every subsequent step will be done fresh
 RUN apt-get update && apt-get upgrade -y
 
-FROM base as klocwork
 
-ARG KW_INSTALLER=https://af01p-igk.devtools.intel.com/artifactory/ScanTools-local/Klocwork/Server/KW20.1/Linux/kw-server-installer.20.1.0.97.linux64.sh
-ARG KW_LICENSE=kwlic.intel.com:7500
 
-# components needed for klocwork
-RUN apt-get install -y libc6 libgcc1 \
-    lib32tinfo6 libncurses5 libaio1 \
-    numactl lsb-core && \
-    wget -q ${KW_INSTALLER}
 
-# setting the id's used by Jenkins
-ARG username=jenkins
-RUN mkdir -p /opt/kwXX && chown -R ${username}:${usergroup} $_
+
+FROM base as bert-op-pytorch
+
+RUN apt-get update && \
+    apt-get install -y \
+        python3 \
+        python3-dev \
+        python3-distutils \
+        python3-pip \
+        python-is-python3 \
+        --no-install-recommends
+
 USER ${username}
-
-# it's recommended to install kw-server as a non-root user
-RUN sh $(basename ${KW_INSTALLER}) -a -i /opt/kwXX --license-server ${KW_LICENSE}
+COPY requirements-pt.txt /tmp/requirements-pt.txt
+RUN python -m pip install --upgrade pip wheel
+RUN python -m pip install -r /tmp/requirements-pt.txt

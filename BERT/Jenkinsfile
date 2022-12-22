@@ -65,6 +65,7 @@ def publishReports() {
                     sh "rm -rf nightly"
                     copyArtifacts filter: '*csv', projectName: 'main.bert/Nightly', selector: lastSuccessful(), target: 'nightly'
                     unstash 'accuracy'
+                    unstash 'accuracy_pytorch'
                     unstash 'benchmark'
                     unstash 'model_zoo'
                     unstash 'bert_op_tests'
@@ -73,11 +74,13 @@ def publishReports() {
                     sh "python ${WORKSPACE}/util/ci/compare_csv.py"
 
                     archiveArtifacts artifacts: "accuracy.html,  accuracy.csv"
+                    archiveArtifacts artifacts: "accuracy_pytorch.html,  accuracy_pytorch.csv"
                     archiveArtifacts artifacts: "benchmark.html, benchmark.csv"
                     archiveArtifacts artifacts: "model_zoo.html, model_zoo.csv"
                     archiveArtifacts artifacts: 'test_results/*'
 
                     step([$class: 'ACIPluginPublisher', name: 'accuracy.html',  shownOnProjectPage: true])
+                    step([$class: 'ACIPluginPublisher', name: 'accuracy_pytorch.html',  shownOnProjectPage: true])
                     step([$class: 'ACIPluginPublisher', name: 'benchmark.html', shownOnProjectPage: true])
                     step([$class: 'ACIPluginPublisher', name: 'model_zoo.html', shownOnProjectPage: true])
                 }
@@ -91,12 +94,13 @@ def buildStages(List env) {
         withEnv(env) {
             stage("Build ${CXX_COMPILER} - ${TF_VERSION}") {
                 dir('build') {
-                    sh 'rm -rf CMakeCache.txt CMakeFiles accuracy.csv acc.html benchmark.csv bench.html model_zoo.csv zoo.html test_results'
+                    sh 'rm -rf CMakeCache.txt CMakeFiles *.csv *.html test_results'
                     sh """#!/bin/bash
                         set -e
                         source /opt/intel/oneapi/setvars.sh intel64
 
-                        cmake --no-warn-unused-cli -DPython3_EXECUTABLE:FILEPATH=/usr/bin/python \
+                        cmake --no-warn-unused-cli -DBACKENDS=TF \
+                                                   -DPython3_EXECUTABLE:FILEPATH=/usr/bin/python \
                                                    -DCMAKE_C_COMPILER=icc \
                                                    -DCMAKE_CXX_COMPILER=${CXX_COMPILER} \
                                                    -DCMAKE_BUILD_TYPE:STRING=Release \
@@ -268,10 +272,10 @@ def testStages(List env) {
     }
 }
 
-def buildDockerfile(List TF_VERSION) {
+def buildDockerfileTensorflow(List TF_VERSION) {
     TF_VERSION.each { tf ->
     // tf 1.15 works with python3.6 only
-    docker.build("${IMAGE_NAME}:${tf}", "--target=base \
+    docker.build("${IMAGE_NAME}:${tf}", "--target=bert-op-tensorflow \
                                     --build-arg TF_VERSION=${tf} \
                                     --build-arg TF_requirements=requirements-tf${tf.replaceFirst(/(\d+)\..*/, '$1')}.txt \
                                     --build-arg PYTHON_VERSION=${tf.startsWith('1') ? "3.6" : "3.9"} \
@@ -279,6 +283,52 @@ def buildDockerfile(List TF_VERSION) {
                                     -f Dockerfile/Dockerfile-ci .")
     }
 }
+
+
+def pytorchStages() {
+    return {
+        stage("Build PyTorch Op") {
+            dir('build') {
+                sh 'rm -rf CMakeCache.txt CMakeFiles *.csv *.html test_results'
+                sh """#!/bin/bash
+                    set -e
+                    source /opt/intel/oneapi/setvars.sh intel64
+
+                    cmake --no-warn-unused-cli -DBACKENDS=PT \
+                                                -DCMAKE_C_COMPILER=gcc \
+                                                -DCMAKE_CXX_COMPILER=g++ \
+                                                -DCMAKE_BUILD_TYPE:STRING=Release \
+                                                -G "Unix Makefiles" ..
+                    cmake --build . --config Release --target clean -v -j --
+                    cmake --build . --config Release --target all -v -j --
+                """
+            }
+
+        }
+        stage("Accuracy PyTorch") {
+            dir('build') {
+                sh """#!/bin/bash
+                    set -e
+                    export BERT_OP_LIB=${WORKSPACE}/build/src/pytorch_op/libBertOpPT.so
+                    export HUGGINGFACE_HUB_CACHE=/data/huggingface_hub_cache
+                    source /opt/intel/oneapi/setvars.sh intel64
+                    ${WORKSPACE}/src/pytorch_op/python/accuracy.py --output-csv accuracy_pytorch.csv -n 500
+                """
+                stash includes: 'accuracy_pytorch.csv', name: 'accuracy_pytorch'
+
+            }
+            
+        }
+    }
+}
+
+def buildDockerfilePytorch()
+{
+    docker.build("${IMAGE_NAME}:pt", "--target=bert-op-pytorch \
+                                    --build-arg username=\$(id -un)  --build-arg userid=\$(id -u) --build-arg usergroup=\$(id -g) \
+                                    -f Dockerfile/Dockerfile-ci .")
+}
+
 // </stages initialized here>
 
 // stages will not be aborted when one of them fails
@@ -309,11 +359,21 @@ for(Map ct_axis in ct_axes) {
     }
 }
 
+tasks['PyTorch'] = { ->
+    node(null) {
+        checkout scm
+        docker.image("${IMAGE_NAME}:pt").inside("--cpuset-cpus=0-10 --init -v ${jenkins_data}:/data") {
+            pytorchStages().call()
+        }
+    }
+}
+
 stage("Matrix builds") {
     prepareReports().call()
     node(params.HOST) {
         checkout scm
-        buildDockerfile(ct_axes.collect{tf -> tf['TF_VERSION']}.unique())
+        buildDockerfileTensorflow(ct_axes.collect{tf -> tf['TF_VERSION']}.unique())
+        buildDockerfilePytorch()
     }
     parallel(tasks)
     publishReports().call()

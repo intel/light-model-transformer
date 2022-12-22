@@ -3,4 +3,11 @@
 #
 
 add_subdirectory(bert_layer)
-add_subdirectory(tf_op)
+
+if("TF" IN_LIST BACKENDS)
+    add_subdirectory(tf_op)
+endif()
+
+if("PT" IN_LIST BACKENDS)
+    add_subdirectory(pytorch_op)
+endif()

@@ -47,6 +47,8 @@ struct MinMax {
         min = std::min(min, min_element);
         max = std::max(max, max_element);
     }
+
+    static constexpr int num_parameters = 2;
 };
 
 std::ostream& operator<< (std::ostream& os, const MinMax& v)
@@ -72,7 +74,33 @@ struct QuantizationFactors
     MinMax intermediate;
     MinMax output;
 
-    static float From(dnnl::memory& mem, dnnl::stream& stm);
+    static QuantizationFactors FromVector(const std::vector<float>& factors)
+    {
+        if (factors.size() != QuantizationFactors::num_parameters)
+        {
+            throw std::runtime_error("Invalid length of quantization factors vector.");
+        }
+        
+        return QuantizationFactors {
+            {factors.at(0), factors.at(1)},
+            {factors.at(2), factors.at(3)},
+            {factors.at(4), factors.at(5)},
+            {factors.at(6), factors.at(7)}
+        };
+    }
+
+    std::vector<float> AsVector() const
+    {
+        return std::vector<float>
+        {
+            qkv.min, qkv.max,
+            attention_out.min, attention_out.max,
+            intermediate.min, intermediate.max,
+            output.min, output.max
+        };
+    }
+
+    static constexpr int num_parameters = MinMax::num_parameters * 4;
 };
 
 std::ostream& operator<< (std::ostream& os, const QuantizationFactors& v)
