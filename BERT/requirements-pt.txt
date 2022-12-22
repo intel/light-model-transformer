@@ -1,0 +1,7 @@
+numpy
+pandas
+transformers
+datasets
+# intel_extension_for_pytorch
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch

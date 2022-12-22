@@ -26,7 +26,17 @@ def compare(fname, cfolder, header, results):
     Diff_suffix    = " Diff"
 
     data_pr = pd.read_csv(fname, sep='\t').dropna().drop_duplicates()
-    data_n  = pd.read_csv(cfolder + os.sep + fname, sep='\t').dropna().drop_duplicates()
+    try:
+        data_n  = pd.read_csv(cfolder + os.sep + fname, sep='\t').dropna().drop_duplicates()
+    # If there's not nightly run to compare to, just save the .html
+    except FileNotFoundError:
+        print(f'No nightly data found for {fname}, saving without comparison.')
+        res = BeautifulSoup(data_pr.to_html(index=False), features='html.parser')
+        for th in res.table.thead.tr.select('th'):
+            th.name = 'td'
+        with open(os.path.splitext(fname)[0] + '.html','w') as f:
+            f.write(str(res))
+        return
 
     # If we add a new column to the table, we need to reindex the nightly DataFrame so that it has the same header.
     # The default np.NaN content of the new column may not make sense for the pd.merge call, so we can add an entry to 
@@ -103,6 +113,10 @@ if __name__ == '__main__':
             cfolder = nightly_dir,
             header  = ['Compiler', 'Model', 'TF', 'Quantization', 'BFloat16'],
             results = ['Result'])
+    compare(fname   = 'accuracy_pytorch.csv',
+            cfolder = nightly_dir,
+            header  = ['Model', 'Quantization', 'BFloat16',],
+            results = ['Accuracy'])
     compare(fname   = 'benchmark.csv',
             cfolder = nightly_dir,
             header  = ['Compiler', 'App', 'TF', 'BERT variant', 'Quantization', 'BFloat16', 'Batch Size'],
