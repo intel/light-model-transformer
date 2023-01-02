@@ -60,7 +60,7 @@ def prepareReports() {
 def publishReports() {
     return {
         stage("Publish Reports") {
-            node(params.HOST) {
+            node(null) {
                 dir("build") {
                     sh "rm -rf nightly"
                     copyArtifacts filter: '*csv', projectName: 'main.bert/Nightly', selector: lastSuccessful(), target: 'nightly'
@@ -360,7 +360,7 @@ for(Map ct_axis in ct_axes) {
 }
 
 tasks['PyTorch'] = { ->
-    node(null) {
+    node(params.HOST) {
         checkout scm
         docker.image("${IMAGE_NAME}:pt").inside("--cpuset-cpus=0-10 --init -v ${jenkins_data}:/data") {
             pytorchStages().call()
