@@ -26,7 +26,7 @@ python -m model_modifier.extract_pattern $1 -o $pattern \
     ReadVariableOp \
     Const \
 -m 0 \
--f __inference_call_7459
+-f __inference_tf_bert_for_sequence_classification_layer_call_and_return_conditional_losses_29584
 
 recipe=$tmpdir/recipe.pb
 
