@@ -71,4 +71,40 @@ $Python3_EXECUTABLE -m model_modifier.configure_bert_op \
 printf "${CXX_COMPILER}\t${path_to_modified_model##*/}\t${TF_VERSION}\t${QUANTIZATION}\t${BFLOAT16}\t" >> $out_file
 $Python3_EXECUTABLE accuracy.py $path_to_modified_model $path_to_bertop --out-file=$out_file
 
+# Hugging Face BERT-base-uncased
+
+path_to_model=$tmpdir/hf-bert-base-uncased
+path_to_modified_model=$tmpdir/modified-hf-bert-base-uncased
+
+printf "${CXX_COMPILER}\t${path_to_model##*/}\t${TF_VERSION}\t-\t-\t" >> $out_file
+$Python3_EXECUTABLE accuracy.py $path_to_model $path_to_bertop --hugging_face bert-base-uncased --out-file=$out_file
+
+$Python3_EXECUTABLE -m model_modifier.configure_bert_op \
+    $QUANTIZATION \
+    $BFLOAT16 \
+    --no-calibrate \
+    --quant-factors-path=$QUANT_FACTORS_DIR/quant_factors_uncased_L-12_H-768_A-12.txt \
+    $path_to_modified_model
+
+printf "${CXX_COMPILER}\t${path_to_modified_model##*/}\t${TF_VERSION}\t${QUANTIZATION}\t${BFLOAT16}\t" >> $out_file
+$Python3_EXECUTABLE accuracy.py $path_to_modified_model $path_to_bertop --hugging_face bert-base-uncased --out-file=$out_file
+
+# Hugging Face BERT-large-cased
+
+path_to_model=$tmpdir/hf-bert-large-cased
+path_to_modified_model=$tmpdir/modified-hf-bert-large-cased
+
+printf "${CXX_COMPILER}\t${path_to_model##*/}\t${TF_VERSION}\t-\t-\t" >> $out_file
+$Python3_EXECUTABLE accuracy.py $path_to_model $path_to_bertop --hugging_face bert-large-cased --out-file=$out_file
+
+$Python3_EXECUTABLE -m model_modifier.configure_bert_op \
+    $QUANTIZATION \
+    $BFLOAT16 \
+    --no-calibrate \
+    --quant-factors-path=$QUANT_FACTORS_DIR/quant_factors_hf_bert_cased.txt \
+    $path_to_modified_model
+
+printf "${CXX_COMPILER}\t${path_to_modified_model##*/}\t${TF_VERSION}\t${QUANTIZATION}\t${BFLOAT16}\t" >> $out_file
+$Python3_EXECUTABLE accuracy.py $path_to_modified_model $path_to_bertop --hugging_face bert-large-cased --out-file=$out_file
+
 popd
