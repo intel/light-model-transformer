@@ -363,7 +363,14 @@ private:
         if (UseQuantization)
         {
             quant_factors_file.exceptions(std::ifstream::failbit);
-            quant_factors_file.open(quant_factors_path);
+            try
+            {
+                quant_factors_file.open(quant_factors_path);
+            }
+            catch(const std::ios_base::failure&)
+            {
+                throw std::runtime_error(std::string{"Failed to open quantization factors file at "} + quant_factors_path);
+            }
         }
 
         for (size_t i = 0; i < layers.size(); ++i)
@@ -397,7 +404,13 @@ private:
             if (UseQuantization)
             {
                 assert(!quant_factors_file.fail());
-                quant_factors_file >> quant_factors;
+                try{
+                    quant_factors_file >> quant_factors;
+                }
+                catch(const std::ios_base::failure&)
+                {
+                    throw std::runtime_error(std::string{"Failed to load values from the quantization factors file at "} + quant_factors_path);
+                }
             }
 
             layers[i]->setWeights(queryW, queryB,
