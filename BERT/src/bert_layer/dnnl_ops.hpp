@@ -27,7 +27,7 @@ public:
 
     MatMul(const dnnl::primitive& prim) : prim_(prim) {}
 
-    void Compute(dnnl::stream& stm, DataSource& src, DataSource& weights, DataSource& bias, dnnl::memory& dst_memory) {
+    void Compute(dnnl::stream& stm, DataSource& src, DataSource& weights, DataSource& bias, dnnl::memory& dst_memory, dnnl::memory scratchpad = {}) {
         const auto prim_desc = PrimDesc();
         assert(prim_desc.dst_desc() == dst_memory.get_desc());
 
@@ -38,14 +38,15 @@ public:
             { DNNL_ARG_SRC, src_memory },
             { DNNL_ARG_WEIGHTS, weights_memory },
             { DNNL_ARG_BIAS, bias_memory },
-            { DNNL_ARG_DST, dst_memory } });
+            { DNNL_ARG_DST, dst_memory },
+            { DNNL_ARG_SCRATCHPAD, scratchpad } });
         // FIXME(rfsaliev) have to wait due to lifetime of x_memory variables
         stm.wait();
     }
 
     void ComputeWithPostOps(dnnl::stream& stm, DataSource& src, DataSource& weights,
                             std::unordered_map<int, std::reference_wrapper<DataSource>>& post_op_data,
-                            dnnl::memory& dst_memory) {
+                            dnnl::memory& dst_memory, dnnl::memory scratchpad = {}) {
         const auto prim_desc = PrimDesc();
         assert(prim_desc.dst_desc() == dst_memory.get_desc());
 
@@ -55,7 +56,8 @@ public:
         std::unordered_map<int, dnnl::memory> args = {
             {DNNL_ARG_SRC, src_memory},
             {DNNL_ARG_WEIGHTS, weights_memory},
-            {DNNL_ARG_DST, dst_memory}
+            {DNNL_ARG_DST, dst_memory},
+            {DNNL_ARG_SCRATCHPAD, scratchpad}
         };
 
         // (krzychut)
@@ -153,7 +155,7 @@ public:
 
     InnerProduct(const dnnl::primitive& prim) : prim_(prim) {}
 
-    void Compute(dnnl::stream& stm, DataSource& src, DataSource& weights, DataSource& bias, dnnl::memory& dst_memory) {
+    void Compute(dnnl::stream& stm, DataSource& src, DataSource& weights, DataSource& bias, dnnl::memory& dst_memory, dnnl::memory scratchpad = {}) {
         const auto prim_desc = PrimDesc();
         assert(prim_desc.dst_desc() == dst_memory.get_desc());
 
@@ -164,14 +166,15 @@ public:
             { DNNL_ARG_SRC, src_memory },
             { DNNL_ARG_WEIGHTS, weights_memory },
             { DNNL_ARG_BIAS, bias_memory },
-            { DNNL_ARG_DST, dst_memory } });
+            { DNNL_ARG_DST, dst_memory },
+            { DNNL_ARG_SCRATCHPAD, scratchpad } });
         // FIXME(rfsaliev) have to wait due to lifetime of x_memory variables
         stm.wait();
     }
 
     void ComputeWithPostOps(dnnl::stream& stm, DataSource& src, DataSource& weights,
                             std::unordered_map<int, std::reference_wrapper<DataSource>>& post_op_data,
-                            dnnl::memory& dst_memory) {
+                            dnnl::memory& dst_memory, dnnl::memory scratchpad = {}) {
         const auto prim_desc = PrimDesc();
         assert(prim_desc.dst_desc() == dst_memory.get_desc());
 
@@ -181,7 +184,8 @@ public:
         std::unordered_map<int, dnnl::memory> args = {
             {DNNL_ARG_SRC, src_memory},
             {DNNL_ARG_WEIGHTS, weights_memory},
-            {DNNL_ARG_DST, dst_memory}
+            {DNNL_ARG_DST, dst_memory},
+            {DNNL_ARG_SCRATCHPAD, scratchpad}
         };
 
         // (krzychut)

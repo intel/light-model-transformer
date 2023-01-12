@@ -45,6 +45,18 @@ public:
         return ZeroPoint(static_cast<int>(std::round(shift)), arg);
     }
 
+    BuildAttrs& ScratchpadModeUser() {
+        attr_.set_scratchpad_mode(dnnl::scratchpad_mode::user);
+        empty = false;
+        return *this;
+    }
+
+    BuildAttrs& ScratchpadModeLib() {
+        attr_.set_scratchpad_mode(dnnl::scratchpad_mode::library);
+        empty = false;
+        return *this;
+    }
+
     BuildAttrs& Eltwise(dnnl::algorithm algo, float alpha = 0, float beta = 0, float scale = 1.f) {
         post_ops_.append_eltwise(scale, algo, alpha, beta);
         empty = false;
