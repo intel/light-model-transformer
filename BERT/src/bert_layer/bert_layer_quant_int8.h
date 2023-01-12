@@ -64,9 +64,8 @@ public:
         // Default operation types
         const auto src_type    = ctx->UnsignedQuantizationType();
         const auto weight_type = ctx->SignedQuantizationType();
-        // TODO(rfsaliev) use ctx->FloatType() for BF16 support
-        const auto bias_type   = dt::f32;
-        const auto dst_type    = dt::f32;
+        const auto bias_type   = ctx->use_quantization ? dt::s32 : ctx->FloatType();
+        const auto dst_type    = ctx->FloatType();
         const auto op_data_types = OpDataTypes{src_type, weight_type, bias_type, dst_type};
 
         auto& eng = ctx->dnnl_context.getEngine();
@@ -116,19 +115,19 @@ public:
         // Compute intermediate buffer type depending on accuracy factor
         intermediateBufType = src_type;
         auto outputWeightType  = weight_type;
+        auto outputBiasType = bias_type;
 
         // Force float output MatMul if scaling less than accuracy factor
         const auto output_SrcScale = computeQuantizationScale(intermediateBufType, quant_factors_.output.min, quant_factors_.output.max);
         if (output_SrcScale < outputQuantizationAccuracyFactor) {
-            // TODO(rfsaliev) use ctx->FloatType() for BF16 support
-            intermediateBufType = outputWeightType = dt::f32;
+            intermediateBufType = outputWeightType = outputBiasType = ctx->FloatType();
         }
 
         // output dense weight and bias
         m = ctx->maxTokenSize; // A.Rows();
         n = ctx->hiddenSize; // B.Cols();
         k = ctx->intermediateSize; // A.Cols() == B.Rows();
-        outputIPDesc = BuildInnerProduct({intermediateBufType, outputWeightType, bias_type, dst_type},
+        outputIPDesc = BuildInnerProduct({intermediateBufType, outputWeightType, outputBiasType, dst_type},
                                          m, n, k,
                                          _quant_factors.output,
                                          _outputWeight,
@@ -168,7 +167,7 @@ public:
     // Do the forward computing for the whole BERT layer
     // input: ctx->maxTokenSize x hidden_size
     // actualTokens: #tokens = ctx->maxTokenSize - padded_tokens
-    void forward(dnnl::memory& inputBufferMem, const dnnl::memory& input_mask) {
+    void forward(dnnl::memory inputBufferMem, const dnnl::memory& input_mask) {
         using namespace dnnl_wrappers;
         auto& stm = ctx->dnnl_context.getEngineStream();
 
@@ -261,8 +260,8 @@ private:
         const auto weight_quant_type = ctx->SignedQuantizationType();
         auto& stm = ctx->dnnl_context.getEngineStream();
 
-        if (zero_point == 0.f || weight_quant_type == dt::f32) {
-            return bias.GetData(stm, {{n}, dt::f32, dnnl::memory::dims{}});
+        if (zero_point == 0.f || weight_quant_type == ctx->FloatType()) {
+            return bias.GetData(stm, {{n}, ctx->FloatType(), dnnl::memory::dims{}});
         }
 
         auto src = weight.GetData(stm, {{n, k}, weight_quant_type, dnnl::memory::dims{}});
@@ -365,7 +364,7 @@ private:
         const auto float_dtype = ctx->FloatType();
         const auto s_dt = float_dtype;
         const auto w_dt = float_dtype;
-        const auto d_dt = DnnlDataType<float>::value;
+        const auto d_dt = ctx->qk_resultBuffer.get_desc().data_type();
 
         // B needs to transpose
         // dnnl::memory::format_tag::cab - is not defined
@@ -398,7 +397,7 @@ private:
         const auto float_dtype = ctx->FloatType();
         const auto s_dt = float_dtype;
         const auto w_dt = float_dtype;
-        const auto d_dt = DnnlDataType<float>::value;
+        const auto d_dt = ctx->resultBuffer1.get_desc().data_type();
 
         const dnnl::memory::desc     src_md{{batch, heads, m, k}, s_dt, dnnl::memory::format_tag::abcd};
         const dnnl::memory::desc weights_md{{batch, heads, k, n}, w_dt, dnnl::memory::format_tag::acbd};

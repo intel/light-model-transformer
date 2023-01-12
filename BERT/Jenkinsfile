@@ -30,9 +30,9 @@ Map run_time_axes = [
     BFLOAT16:     ['--no-bfloat16', '--bfloat16']
 ]
 
-// TODO: remove when bf16 is fixed
+// TODO: remove when bf16 with quant is fixed
 List rt_axes = getMatrixAxes(run_time_axes).findAll { axis ->
-    !(axis['BFLOAT16'] == '--bfloat16')
+    !(axis['BFLOAT16'] == '--bfloat16' && axis['QUANTIZATION'] == '--quantization')
 }
 
 // </matrix parameters initialized here>

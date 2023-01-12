@@ -41,11 +41,11 @@ public:
         , use_quantization{use_quantization}
         , use_bfloat16{use_bfloat16}
         , calibrate_quant_factors{calibrate_quant_factors}
-        , query{dnnl::memory::desc{{batch * maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
-        , key  {dnnl::memory::desc{{batch * maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
-        , value{dnnl::memory::desc{{batch * maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
-        , resultBuffer1{dnnl::memory::desc{{batch * maxTokenSize, hiddenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
-        , qk_resultBuffer{dnnl::memory::desc{{batch, hiddenSize / head_size, maxTokenSize, maxTokenSize}, dt::f32, dims{}}, dnnl_context.getEngine()}
+        , query{dnnl::memory::desc{{batch * maxTokenSize, hiddenSize}, FloatType(), dims{}}, dnnl_context.getEngine()}
+        , key  {dnnl::memory::desc{{batch * maxTokenSize, hiddenSize}, FloatType(), dims{}}, dnnl_context.getEngine()}
+        , value{dnnl::memory::desc{{batch * maxTokenSize, hiddenSize}, FloatType(), dims{}}, dnnl_context.getEngine()}
+        , resultBuffer1{dnnl::memory::desc{{batch * maxTokenSize, hiddenSize}, FloatType(), dims{}}, dnnl_context.getEngine()}
+        , qk_resultBuffer{dnnl::memory::desc{{batch, hiddenSize / head_size, maxTokenSize, maxTokenSize}, FloatType(), dims{}}, dnnl_context.getEngine()}
         , intermediateBuffers_{{
             UnsignedQuantizationType(),
             dnnl::memory{dnnl::memory::desc{{batch * maxTokenSize, intermediateSize}, UnsignedQuantizationType(), dims{}}, dnnl_context.getEngine()}
@@ -55,8 +55,9 @@ public:
         assert(hiddenSize % head_size == 0);
     }
 
-    dnnl::memory::data_type   SignedQuantizationType() const { return use_quantization ? dt::s8 : dt::f32; }
-    dnnl::memory::data_type UnsignedQuantizationType() const { return use_quantization ? dt::u8 : dt::f32; }
+    dnnl::memory::data_type   SignedQuantizationType() const { return use_quantization ? dt::s8 : FloatType(); }
+    dnnl::memory::data_type UnsignedQuantizationType() const { return use_quantization ? dt::u8 : FloatType(); }
+    dnnl::memory::data_type QuantizationType() const { return use_quantization ? dt::s8 : FloatType(); }
 
     dnnl::memory::data_type FloatType() const { return use_bfloat16 ? dt::bf16 : dt::f32; }
 
