@@ -132,6 +132,7 @@ def buildStages(List env) {
 def testStages(List env) {
     return {
         withEnv(env) {
+            if (TF_VERSION.startsWith('2'))
             stage("benchmark ${CXX_COMPILER} - ${TF_VERSION} - ${QUANTIZATION} - ${BFLOAT16}") {
                 dir('build') {
                     sh "echo in build: ${WORKSPACE} \$(pwd)"
@@ -208,23 +209,32 @@ def testStages(List env) {
                                 path_to_bertop=${WORKSPACE}/build/src/tf_op/libBertOp.so
                                 source /opt/intel/oneapi/setvars.sh intel64
                                 FROZEN_DIR=${ORIGINAL_MODEL_DIRS[MODEL]}
-                                python ${WORKSPACE}/tests/model_zoo/run_model_zoo.py \
-                                --frozen_graph_path=\${FROZEN_DIR}/frozen_model.pb \
-                                --output_dir=\${OUTPUT_DIR} \
-                                --bert_config_file=\${BERT_BASE_DIR}/bert_config.json \
-                                --do_train=False \
-                                --precision=fp32 \
-                                --do_lower_case=True \
-                                --task_name=MRPC \
-                                --do_eval=true \
-                                --vocab_file=\${BERT_BASE_DIR}/vocab.txt \
-                                --data_dir=\${GLUE_DIR}/MRPC \
-                                --eval_batch_size=${BATCH_SIZE} \
-                                --experimental_gelu=False \
-                                --max_seq_length=128 \
-                                --inter_op_parallelism_threads=1 \
-                                --intra_op_parallelism_threads=18 \
-                                \${path_to_bertop} 2>&1 | tee model_zoo.log
+
+                                # running only once when both QUANTIZATION and BFLOAT16 are disabled
+                                if [[ "${QUANTIZATION}" =~ "--no" && "${BFLOAT16}" =~ "--no" ]] ; then
+                                    python ${WORKSPACE}/tests/model_zoo/run_model_zoo.py \
+                                    --frozen_graph_path=\${FROZEN_DIR}/frozen_model.pb \
+                                    --output_dir=\${OUTPUT_DIR} \
+                                    --bert_config_file=\${BERT_BASE_DIR}/bert_config.json \
+                                    --do_train=False \
+                                    --precision=fp32 \
+                                    --do_lower_case=True \
+                                    --task_name=MRPC \
+                                    --do_eval=true \
+                                    --vocab_file=\${BERT_BASE_DIR}/vocab.txt \
+                                    --data_dir=\${GLUE_DIR}/MRPC \
+                                    --eval_batch_size=${BATCH_SIZE} \
+                                    --experimental_gelu=False \
+                                    --max_seq_length=128 \
+                                    --inter_op_parallelism_threads=1 \
+                                    --intra_op_parallelism_threads=18 \
+                                    \${path_to_bertop} 2>&1 | tee model_zoo.log
+
+                                    model_zoo1=\$(grep -m1 'w:  eval_accuracy ' model_zoo.log | sed 's/.*= \\(.*\\)/'${CXX_COMPILER}'\tfrozen\t'${TF_VERSION}'\t'${MODEL}'\t'${QUANTIZATION}'\t'${BFLOAT16}'\t'${BATCH_SIZE}'\t\\1/' )
+                                    model_zoo2=\$(grep -m1 'Throughput is ' model_zoo.log | sed 's/.*is \\(.*\\)/\\1/' )
+                                    echo "\$model_zoo1\t\$model_zoo2" >> model_zoo.csv
+                                fi
+
                                 tmpdir=\$(mktemp -d)
                                 cp -R ${MODIFIED_MODEL_DIRS[MODEL]}/* \${tmpdir}/
                                 FROZEN_DIR=\${tmpdir}
@@ -252,13 +262,9 @@ def testStages(List env) {
                                 --inter_op_parallelism_threads=1 \
                                 --intra_op_parallelism_threads=18 \
                                 \${path_to_bertop} 2>&1 | tee -a model_zoo.log
-                            """
-                            sh """
-                                model_zoo1=\$(grep -m1 'w:  eval_accuracy ' model_zoo.log | sed 's/.*= \\(.*\\)/'${CXX_COMPILER}'\tfrozen\t'${TF_VERSION}'\t'${MODEL}'\t'${QUANTIZATION}'\t'${BFLOAT16}'\t'${BATCH_SIZE}'\t\\1/' )
-                                model_zoo2=\$(grep -m1 'Throughput is ' model_zoo.log | sed 's/.*is \\(.*\\)/\\1/' )
+
                                 model_zoo3=\$(grep 'w:  eval_accuracy ' model_zoo.log | sed 's/.*= \\(.*\\)/'${CXX_COMPILER}'\tfrozen_modified\t'${TF_VERSION}'\t'${MODEL}'\t'${QUANTIZATION}'\t'${BFLOAT16}'\t'${BATCH_SIZE}'\t\\1/' | tail -1)
                                 model_zoo4=\$(grep 'Throughput is ' model_zoo.log | sed 's/.*is \\(.*\\)/\\1/' | tail -1)
-                                echo "\$model_zoo1\t\$model_zoo2" >> model_zoo.csv
                                 echo "\$model_zoo3\t\$model_zoo4" >> model_zoo.csv
                             """
                         }

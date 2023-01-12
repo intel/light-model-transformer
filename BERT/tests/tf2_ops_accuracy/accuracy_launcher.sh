@@ -22,8 +22,10 @@ pushd $(dirname $0)
 path_to_model=$tmpdir/fine_tuned
 path_to_modified_model=$tmpdir/modified_fine_tuned
 
-printf "${CXX_COMPILER}\t${path_to_model##*/}\t${TF_VERSION}\t-\t-\t" >> $out_file
-$Python3_EXECUTABLE accuracy.py $path_to_model $path_to_bertop --out-file=$out_file
+if [[ "${QUANTIZATION}" =~ "--no" && "${BFLOAT16}" =~ "--no" ]] ; then
+    printf "${CXX_COMPILER}\t${path_to_model##*/}\t${TF_VERSION}\t-\t-\t" >> $out_file
+    $Python3_EXECUTABLE accuracy.py $path_to_model $path_to_bertop --out-file=$out_file
+fi
 
 $Python3_EXECUTABLE -m model_modifier.configure_bert_op \
     $QUANTIZATION \
@@ -40,8 +42,10 @@ $Python3_EXECUTABLE accuracy.py $path_to_modified_model $path_to_bertop --out-fi
 path_to_model=$tmpdir/bert-base-256-seq-len
 path_to_modified_model=$tmpdir/modified-bert-base-256-seq-len
 
-printf "${CXX_COMPILER}\t${path_to_model##*/}\t${TF_VERSION}\t-\t-\t" >> $out_file
-$Python3_EXECUTABLE accuracy.py $path_to_model $path_to_bertop --out-file=$out_file
+if [[ "${QUANTIZATION}" =~ "--no" && "${BFLOAT16}" =~ "--no" ]] ; then
+    printf "${CXX_COMPILER}\t${path_to_model##*/}\t${TF_VERSION}\t-\t-\t" >> $out_file
+    $Python3_EXECUTABLE accuracy.py $path_to_model $path_to_bertop --out-file=$out_file
+fi
 
 $Python3_EXECUTABLE -m model_modifier.configure_bert_op \
     $QUANTIZATION \
@@ -58,8 +62,10 @@ $Python3_EXECUTABLE accuracy.py $path_to_modified_model $path_to_bertop --out-fi
 path_to_model=$tmpdir/bert-large-128-seq-len
 path_to_modified_model=$tmpdir/modified-bert-large-128-seq-len
 
-printf "${CXX_COMPILER}\t${path_to_model##*/}\t${TF_VERSION}\t-\t-\t" >> $out_file
-$Python3_EXECUTABLE accuracy.py $path_to_model $path_to_bertop --out-file=$out_file
+if [[ "${QUANTIZATION}" =~ "--no" && "${BFLOAT16}" =~ "--no" ]] ; then
+    printf "${CXX_COMPILER}\t${path_to_model##*/}\t${TF_VERSION}\t-\t-\t" >> $out_file
+    $Python3_EXECUTABLE accuracy.py $path_to_model $path_to_bertop --out-file=$out_file
+fi
 
 $Python3_EXECUTABLE -m model_modifier.configure_bert_op \
     $QUANTIZATION \
@@ -76,8 +82,10 @@ $Python3_EXECUTABLE accuracy.py $path_to_modified_model $path_to_bertop --out-fi
 path_to_model=$tmpdir/hf-bert-base-uncased
 path_to_modified_model=$tmpdir/modified-hf-bert-base-uncased
 
-printf "${CXX_COMPILER}\t${path_to_model##*/}\t${TF_VERSION}\t-\t-\t" >> $out_file
-$Python3_EXECUTABLE accuracy.py $path_to_model $path_to_bertop --hugging_face bert-base-uncased --out-file=$out_file
+if [[ "${QUANTIZATION}" =~ "--no" && "${BFLOAT16}" =~ "--no" ]] ; then
+    printf "${CXX_COMPILER}\t${path_to_model##*/}\t${TF_VERSION}\t-\t-\t" >> $out_file
+    $Python3_EXECUTABLE accuracy.py $path_to_model $path_to_bertop --hugging_face bert-base-uncased --out-file=$out_file
+fi
 
 $Python3_EXECUTABLE -m model_modifier.configure_bert_op \
     $QUANTIZATION \
@@ -94,8 +102,10 @@ $Python3_EXECUTABLE accuracy.py $path_to_modified_model $path_to_bertop --huggin
 path_to_model=$tmpdir/hf-bert-large-cased
 path_to_modified_model=$tmpdir/modified-hf-bert-large-cased
 
-printf "${CXX_COMPILER}\t${path_to_model##*/}\t${TF_VERSION}\t-\t-\t" >> $out_file
-$Python3_EXECUTABLE accuracy.py $path_to_model $path_to_bertop --hugging_face bert-large-cased --out-file=$out_file
+if [[ "${QUANTIZATION}" =~ "--no" && "${BFLOAT16}" =~ "--no" ]] ; then
+    printf "${CXX_COMPILER}\t${path_to_model##*/}\t${TF_VERSION}\t-\t-\t" >> $out_file
+    $Python3_EXECUTABLE accuracy.py $path_to_model $path_to_bertop --hugging_face bert-large-cased --out-file=$out_file
+fi
 
 $Python3_EXECUTABLE -m model_modifier.configure_bert_op \
     $QUANTIZATION \
