@@ -183,7 +183,20 @@ public:
 
             OP_REQUIRES_OK(context, setInputMask(tensor_masks));
 
-            auto embeddings = tensor_adapter.AsDnnlMemory(tensor_embedded, ctx->dnnl_context.getEngine());
+            auto embedding_input = tensor_adapter.AsDnnlMemory(tensor_embedded, ctx->dnnl_context.getEngine());
+            auto embeddings = [this](dnnl::memory& input) -> dnnl::memory {
+                auto input_md = input.get_desc();
+                if (input_md.data_type() == ctx->FloatType()) {
+                    return input;
+                }
+
+                dnnl::memory::desc result_md{input_md.dims(), ctx->FloatType(), dnnl::memory::dims{}};
+                dnnl::memory result{result_md, ctx->dnnl_context.getEngine()};
+                dnnl::reorder{input, result}.execute(ctx->dnnl_context.getEngineStream(), input, result);
+                ctx->dnnl_context.getEngineStream().wait();
+                return result;
+            }(embedding_input);
+
             try
             {
                 for (const auto& bert_layer : this->bert_layers)
@@ -196,6 +209,11 @@ public:
                 std::string message = "Forward computation failed. what(): ";
                 message += e.what();
                 OP_REQUIRES(context, false, errors::Internal(message));
+            }
+
+            if (embedding_input != embeddings) {
+                dnnl::reorder{embeddings, embedding_input}.execute(ctx->dnnl_context.getEngineStream(), embeddings, embedding_input);
+                ctx->dnnl_context.getEngineStream().wait();
             }
 
             // Copy data to output

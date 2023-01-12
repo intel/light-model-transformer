@@ -346,7 +346,7 @@ public:
         const auto src_md = prim_desc.src_desc();
         auto src_memory = src.GetData(stm, src_md);
 
-        const auto scaleshift_md = dnnl::memory::desc{{1, src_md.dims().back()}, src_md.data_type(), dnnl::memory::dims{}};
+        const auto scaleshift_md = dnnl::memory::desc{{1, src_md.dims().back()}, dnnl::memory::data_type::f32, dnnl::memory::dims{}};
         auto scale_memory = scale.GetData(stm, scaleshift_md);
         auto shift_memory = shift.GetData(stm, scaleshift_md);
 

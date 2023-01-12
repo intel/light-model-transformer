@@ -72,10 +72,14 @@ def main(args: argparse.Namespace):
     import bert_op
 
     quant_values = [True, False]
-    bf_values = [False]
+    bf_values = [False, True]
 
     config = transformers.BertConfig.from_pretrained(args.model)
     for quant, bf16 in itertools.product(quant_values, bf_values):
+        # Skip Quant+BF16 due to very slow implementations for pre-SPR HW
+        if quant and bf16:
+            continue
+
         print(f'Running optimized model: Quantization = {quant}, BFloat16 = {bf16}')
         config.use_quantization = quant
         config.use_bfloat16 = bf16
