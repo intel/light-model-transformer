@@ -296,9 +296,14 @@ private:
         std::unique_ptr<dnnl_wrappers::InnerProduct> prim;
         float scale;
         float shift;
+        // dnnl::memory is actually shared pointer to a buffer
+        // there is the chance that context will change underlying buffer for scratchpad space
+        // so let's store a pointer to context's scratchpad memory field rather than copy underlying buffer
+        // this will allow us to re-use 1 scratchpad buffer for all primitives
+        std::shared_ptr<dnnl::memory> scratchpad;
 
         void Compute(dnnl::stream& stm, dnnl_wrappers::DataSource& src, dnnl::memory& dst_memory) {
-            prim->Compute(stm, src, weight, bias, dst_memory);
+            prim->Compute(stm, src, weight, bias, dst_memory, scratchpad ? *scratchpad : dnnl::memory{});
         }
 
         dnnl_wrappers::DataSource ScaledData(const dnnl::memory& mem) {
@@ -343,7 +348,10 @@ private:
 
             ipConfig.prim   = std::make_unique<InnerProduct>(MakeInnerProduct(
                                        eng, ctx->batch_, m, n, k, data_types.src_dt, data_types.weight_dt,
-                                       data_types.bias_dt, data_types.dst_dt, attrs.Scale(dst_scale)));
+                                       data_types.bias_dt, data_types.dst_dt, attrs.Scale(dst_scale).ScratchpadModeUser()));
+
+            ipConfig.scratchpad = ctx->AllocateScratchpad(ipConfig.prim->PrimDesc().scratchpad_desc());
+
             return ipConfig;
     }
 

@@ -50,6 +50,7 @@ public:
             UnsignedQuantizationType(),
             dnnl::memory{dnnl::memory::desc{{batch * maxTokenSize, intermediateSize}, UnsignedQuantizationType(), dims{}}, dnnl_context.getEngine()}
           }}
+        , scratchpadBuffer_{std::make_shared<dnnl::memory>()}
     {
         assert(hiddenSize % head_size == 0);
     }
@@ -71,6 +72,26 @@ public:
         // no buffer found for dt - construct, add and return
         intermediateBuffers_.emplace_back(atype, dnnl::memory{dnnl::memory::desc{{batch_ * maxTokenSize, intermediateSize}, atype, dims{}}, dnnl_context.getEngine()});
         return intermediateBuffers_.back().second;
+    }
+
+    // dnnl::memory is actually shared pointer to a buffer
+    // so let's use a pointer to scratchpad memory field rather than copy underlying buffer
+    // this will allow us to re-use 1 scratchpad buffer for all primitives
+    std::shared_ptr<dnnl::memory> AllocateScratchpad(const dnnl::memory::desc& md) {
+        // Extra guard if allocation in constructor disappeared
+        if (!scratchpadBuffer_) {
+            scratchpadBuffer_ = std::make_shared<dnnl::memory>();
+        }
+
+        if (md.is_zero()) {
+            return scratchpadBuffer_;
+        }
+        
+        if (!*scratchpadBuffer_ || scratchpadBuffer_->get_desc().get_size() < md.get_size()) {
+            *scratchpadBuffer_ = dnnl::memory{md, dnnl_context.getEngine()};
+        }
+
+        return scratchpadBuffer_;
     }
 
     int maxTokenSize;
@@ -95,6 +116,7 @@ public:
 private:
     // Buffer to store the result of intermediate
     std::vector<std::pair<dt, dnnl::memory>> intermediateBuffers_;
+    std::shared_ptr<dnnl::memory> scratchpadBuffer_;
 };
 
 
