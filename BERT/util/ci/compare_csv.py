@@ -99,29 +99,56 @@ def compare(fname, cfolder, header, results):
     for th in res.table.thead.tr.select('th'):
         th.name = 'td'
 
+    res.table.attrs['sorttable'] = "yes"
+
+    # looks like sometimes plugin cannot handle thead and tbody tags
+    res.table.thead.unwrap()
+    res.table.tbody.unwrap()
+
     with open(os.path.splitext(fname)[0] + '.html','w') as f:
         f.write(str(res))
 
+    return res, os.path.splitext(fname)[0]
+
     # with open(os.path.splitext(fname)[0] + '.html','w') as f:
     #     f.write(str(st.to_html()))
+
+# Plugin correctly shows several tables on a page only when all of them are inside of one section
+def summary(reports):
+    res = BeautifulSoup()
+    res.append(res.new_tag("tabs"))
+
+    for report, caption in reports:
+        tab = res.new_tag("tab")
+        tab.attrs['name'] = caption
+        tab.append(report)
+        res.tabs.append(tab)
+
+    with open('fullReport.html','w') as f:
+        f.write(str(res))
 
 
 if __name__ == '__main__':
     nightly_dir = "nightly"
 
-    compare(fname   = 'accuracy.csv',
+    accuracy = compare(fname   = 'accuracy.csv',
             cfolder = nightly_dir,
             header  = ['Compiler', 'Model', 'TF', 'Quantization', 'BFloat16'],
             results = ['Result'])
-    compare(fname   = 'accuracy_pytorch.csv',
+    accuracy_pytorch = compare(fname   = 'accuracy_pytorch.csv',
             cfolder = nightly_dir,
             header  = ['Model', 'Quantization', 'BFloat16',],
             results = ['Accuracy'])
-    compare(fname   = 'benchmark.csv',
+    benchmark = compare(fname   = 'benchmark.csv',
             cfolder = nightly_dir,
             header  = ['Compiler', 'App', 'TF', 'BERT variant', 'Quantization', 'BFloat16', 'Batch Size'],
             results = ['Throughput'])
-    compare(fname   = 'model_zoo.csv',
+    model_zoo = compare(fname   = 'model_zoo.csv',
             cfolder = nightly_dir,
             header  = ['Compiler', 'Model', 'TF', 'BERT variant', 'Quantization', 'BFloat16', 'Batch Size'],
             results = ['Result', 'Throughput'])
+
+    summary([accuracy,
+             accuracy_pytorch,
+             benchmark,
+             model_zoo])
