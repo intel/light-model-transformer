@@ -73,16 +73,14 @@ def publishReports() {
                     sh "python -m pip install --user -r ${WORKSPACE}/util/ci/requirements.txt"
                     sh "python ${WORKSPACE}/util/ci/compare_csv.py"
 
-                    archiveArtifacts artifacts: "accuracy.html,  accuracy.csv"
-                    archiveArtifacts artifacts: "accuracy_pytorch.html,  accuracy_pytorch.csv"
-                    archiveArtifacts artifacts: "benchmark.html, benchmark.csv"
-                    archiveArtifacts artifacts: "model_zoo.html, model_zoo.csv"
+                    archiveArtifacts artifacts: "accuracy.csv"
+                    archiveArtifacts artifacts: "accuracy_pytorch.csv"
+                    archiveArtifacts artifacts: "benchmark.csv"
+                    archiveArtifacts artifacts: "model_zoo.csv"
+                    archiveArtifacts artifacts: "fullReport.html"
                     archiveArtifacts artifacts: 'test_results/*'
 
-                    step([$class: 'ACIPluginPublisher', name: 'accuracy.html',  shownOnProjectPage: true])
-                    step([$class: 'ACIPluginPublisher', name: 'accuracy_pytorch.html',  shownOnProjectPage: true])
-                    step([$class: 'ACIPluginPublisher', name: 'benchmark.html', shownOnProjectPage: true])
-                    step([$class: 'ACIPluginPublisher', name: 'model_zoo.html', shownOnProjectPage: true])
+                    step([$class: 'ACIPluginPublisher', name: 'fullReport.html',  shownOnProjectPage: true])
                 }
             }
         }
