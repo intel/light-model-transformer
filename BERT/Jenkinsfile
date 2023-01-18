@@ -51,6 +51,13 @@ def prepareReports() {
 
                     sh 'printf "Compiler\tModel\tTF\tBERT variant\tQuantization\tBFloat16\tBatch Size\tResult\tThroughput\n" > model_zoo.csv'
                     stash includes: 'model_zoo.csv', name: 'model_zoo'
+
+                    CPUS = sh (
+                        script: 'lscpu | grep "NUMA node1" | sed "s/.*,//"',
+                        returnStdout: true
+                    ).trim() as String
+
+                    env.NUMA = "numactl -C ${CPUS} --membind=1"
                 }
             }
         }
@@ -141,12 +148,12 @@ def testStages(List env) {
                         for(BATCH_SIZE in [1, 32]) {
                             sh """#!/bin/bash
                                 source /opt/intel/oneapi/setvars.sh intel64
-                                ./tests/benchmark/benchmark ${a} ${BATCH_SIZE} ${QUANTIZATION} ${BFLOAT16} | tee benchmark.log
+                                ${NUMA} ./tests/benchmark/benchmark ${a} ${BATCH_SIZE} ${QUANTIZATION} ${BFLOAT16} | tee benchmark.log
                             """
                             sh "grep 'Average Throughput' benchmark.log | sed 's/.*Throughput: \\(.*\\)/${CXX_COMPILER}\\tbenchmark.exe ${a}\\t${TF_VERSION}\\tBERT-base\\t${QUANTIZATION}\\t${BFLOAT16}\\t${BATCH_SIZE}\\t\\1/' >> benchmark.csv"
                             sh """#!/bin/bash
                                 source /opt/intel/oneapi/setvars.sh intel64
-                                ./tests/benchmark/benchmark ${a} ${BATCH_SIZE} ${QUANTIZATION} ${BFLOAT16} --large | tee benchmark.log
+                                ${NUMA} ./tests/benchmark/benchmark ${a} ${BATCH_SIZE} ${QUANTIZATION} ${BFLOAT16} --large | tee benchmark.log
                             """
                             sh "grep 'Average Throughput' benchmark.log | sed 's/.*Throughput: \\(.*\\)/${CXX_COMPILER}\\tbenchmark.exe ${a}\\t${TF_VERSION}\\tBERT-large\\t${QUANTIZATION}\\t${BFLOAT16}\\t${BATCH_SIZE}\\t\\1/' >> benchmark.csv"
                         }
@@ -212,7 +219,7 @@ def testStages(List env) {
 
                                 # running only once when both QUANTIZATION and BFLOAT16 are disabled
                                 if [[ "${QUANTIZATION}" =~ "--no" && "${BFLOAT16}" =~ "--no" ]] ; then
-                                    python ${WORKSPACE}/tests/model_zoo/run_model_zoo.py \
+                                    ${NUMA} python ${WORKSPACE}/tests/model_zoo/run_model_zoo.py \
                                     --frozen_graph_path=\${FROZEN_DIR}/frozen_model.pb \
                                     --output_dir=\${OUTPUT_DIR} \
                                     --bert_config_file=\${BERT_BASE_DIR}/bert_config.json \
@@ -245,7 +252,7 @@ def testStages(List env) {
                                     --quant-factors-path=\${QUANT_FACTORS_PATH} \
                                     \${FROZEN_DIR}/frozen_graph.pb
 
-                                python ${WORKSPACE}/tests/model_zoo/run_model_zoo.py \
+                                ${NUMA} python ${WORKSPACE}/tests/model_zoo/run_model_zoo.py \
                                 --frozen_graph_path=\${FROZEN_DIR}/frozen_graph.pb \
                                 --output_dir=\${OUTPUT_DIR} \
                                 --bert_config_file=\${BERT_BASE_DIR}/bert_config.json \
@@ -347,7 +354,7 @@ for(Map ct_axis in ct_axes) {
         withEnv(ct_axisEnv) {
             node(params.HOST) {
                 checkout scm
-                docker.image("${IMAGE_NAME}:${TF_VERSION}").inside("--cpuset-cpus=0-10 --init -v ${jenkins_data}:/data") {
+                docker.image("${IMAGE_NAME}:${TF_VERSION}").inside("--privileged --init -v ${jenkins_data}:/data") {
                     buildStages(ct_axisEnv).call()
                     if (CXX_COMPILER == "icpc") {
                         for(Map rt_axis in rt_axes) {
