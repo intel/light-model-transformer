@@ -68,6 +68,7 @@ def publishReports() {
     return {
         stage("Publish Reports") {
             node(null) {
+                checkout scm
                 dir("build") {
                     sh "rm -rf nightly"
                     copyArtifacts filter: '*csv', projectName: 'main.bert/Nightly', selector: lastSuccessful(), target: 'nightly'
