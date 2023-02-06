@@ -98,6 +98,12 @@ class BertEncoderOp(torch.nn.Module):
 
         if not self._weights_initialized:
             self.config.batch_size = hidden_states.shape[0]
+            if not hasattr(self.config, "use_quantization"):
+                self.config.use_quantization = False
+            if not hasattr(self.config, "use_bfloat16"):
+                self.config.use_bfloat16 = False
+            if not hasattr(self.config, "quantization_factors"):
+                self.config.quantization_factors = []
             self.bert_op.configure(self.config.max_position_embeddings,
                                    self.config.hidden_size,
                                    self.config.intermediate_size,
