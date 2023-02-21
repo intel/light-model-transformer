@@ -44,7 +44,8 @@ public:
     // ctx->hiddenSize 768 Hidden layer neurons, number of hidden units
     // ctx->intermediateSize 3072 feed-forward/filter size dimension 4*ctx->hiddenSize 
     BertLayer(const std::shared_ptr<BertContext> &_ctx)
-    : ctx{_ctx} {
+    : ctx{_ctx}
+    , intermediateBufType{ctx->UnsignedQuantizationType()} {
     }
 
     ~BertLayer() {}
@@ -293,8 +294,8 @@ private:
         dnnl_wrappers::CachedDataSource weight;
         dnnl_wrappers::CachedDataSource bias;
         std::unique_ptr<dnnl_wrappers::InnerProduct> prim;
-        float scale;
-        float shift;
+        float scale = 1.f;
+        float shift = 0.f;
         // dnnl::memory is actually shared pointer to a buffer
         // there is the chance that context will change underlying buffer for scratchpad space
         // so let's store a pointer to context's scratchpad memory field rather than copy underlying buffer
