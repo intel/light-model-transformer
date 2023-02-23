@@ -1,5 +1,18 @@
 # BERT Model Optimization Change Log
 
+## v0.8 - 2023-02-22
+
+### Added
+
+* Fixed INT8 accuracy issue for sequence len > 128
+* BF16 optimization support - more than 2.5x performance gain on 4th Gen Intel® Xeon® Scalable processors
+* Huggingface BERT models support (see the [README](util/tf2-hf/README.md))
+* Experimental PyTorch integration (use cmake -DBACKENDS=PT to enable)
+
+### Known Issues
+
+* PyTorch integration performance
+
 ## v0.7 - 2022-11-02
 
 ### Added
