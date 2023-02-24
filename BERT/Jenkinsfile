@@ -1,0 +1,318 @@
+@NonCPS
+List getMatrixAxes(Map matrix_axes) {
+    List axes = []
+    matrix_axes.each { axis, values ->
+        List axisList = []
+        values.each { value ->
+            axisList << [(axis): value]
+        }
+        axes << axisList
+    }
+    // calculate cartesian product
+    axes.combinations()*.sum()
+}
+
+IMAGE_NAME = "bert_${BUILD_NUMBER}"
+
+// <matrix parameters initialized here>
+Map compile_time_axes = [
+    TF_VERSION:   ['1.15.4', '2.5.2', '2.9.0'],
+    CXX_COMPILER: ['icpc', 'g++', 'icpx']
+]
+
+List ct_axes = getMatrixAxes(compile_time_axes).findAll { axis ->
+    // NIGHTLY-only params
+    !(params.NIGHTLY == null && axis['TF_VERSION'] in ['2.5.2'])
+}
+
+Map run_time_axes = [
+    QUANTIZATION: ['--quantization', '--no-quantization'],
+    BFLOAT16:     ['--no-bfloat16', '--bfloat16']
+]
+
+// TODO: remove when bf16 is fixed
+List rt_axes = getMatrixAxes(run_time_axes).findAll { axis ->
+    !(axis['BFLOAT16'] == '--bfloat16')
+}
+
+// </matrix parameters initialized here>
+
+// <stages initialized here>
+def prepareReports() {
+    return {
+        stage("Prepare Reports") {
+            node(null) {
+                dir("build") {
+                    sh 'printf "Compiler\tModel\tTF\tQuantization\tBFloat16\tCorrect/Total\tResult\n" > accuracy.csv'
+                    stash includes: 'accuracy.csv', name: 'accuracy'
+
+                    sh 'printf "Compiler\tApp\tTF\tBERT variant\tQuantization\tBFloat16\tBatch Size\tThroughput\n" > benchmark.csv'
+                    stash includes: 'benchmark.csv', name: 'benchmark'
+
+                    sh 'printf "Compiler\tModel\tTF\tBERT variant\tQuantization\tBFloat16\tBatch Size\tResult\tThroughput\n" > model_zoo.csv'
+                    stash includes: 'model_zoo.csv', name: 'model_zoo'
+                }
+            }
+        }
+    }
+}
+
+def publishReports() {
+    return {
+        stage("Publish Reports") {
+            node(null) {
+                dir("build") {
+                    sh "rm -rf nightly"
+                    copyArtifacts filter: '*csv', projectName: 'main.bert/Nightly', selector: lastSuccessful(), target: 'nightly'
+                    unstash 'accuracy'
+                    unstash 'benchmark'
+                    unstash 'model_zoo'
+                    unstash 'bert_op_tests'
+
+                    sh "python -m pip install --user -r ${WORKSPACE}/util/ci/requirements.txt"
+                    sh "python ${WORKSPACE}/util/ci/compare_csv.py"
+
+                    archiveArtifacts artifacts: "accuracy.html,  accuracy.csv"
+                    archiveArtifacts artifacts: "benchmark.html, benchmark.csv"
+                    archiveArtifacts artifacts: "model_zoo.html, model_zoo.csv"
+                    archiveArtifacts artifacts: 'test_results/*'
+
+                    step([$class: 'ACIPluginPublisher', name: 'accuracy.html',  shownOnProjectPage: true])
+                    step([$class: 'ACIPluginPublisher', name: 'benchmark.html', shownOnProjectPage: true])
+                    step([$class: 'ACIPluginPublisher', name: 'model_zoo.html', shownOnProjectPage: true])
+                }
+            }
+        }
+    }
+}
+
+def buildStages(List env) {
+    return {
+        withEnv(env) {
+            stage("Build ${CXX_COMPILER} - ${TF_VERSION}") {
+                dir('build') {
+                    sh 'rm -rf CMakeCache.txt CMakeFiles accuracy.csv acc.html benchmark.csv bench.html model_zoo.csv zoo.html test_results'
+                    sh """#!/bin/bash
+                        set -e
+                        source /opt/intel/oneapi/setvars.sh intel64
+
+                        cmake --no-warn-unused-cli -DPython3_EXECUTABLE:FILEPATH=/usr/bin/python \
+                                                   -DCMAKE_C_COMPILER=icc \
+                                                   -DCMAKE_CXX_COMPILER=${CXX_COMPILER} \
+                                                   -DCMAKE_BUILD_TYPE:STRING=Release \
+                                                   -G "Unix Makefiles" ..
+                        cmake --build . --config Release --target clean -v -j --
+                        cmake --build . --config Release --target all -v -j --
+                    """
+                }
+            }
+            
+            if (TF_VERSION.startsWith('2'))
+            stage("BertOp tests ${CXX_COMPILER} - ${TF_VERSION}") {
+                dir('build') {
+                    test_results = "bert_op_tests_${CXX_COMPILER}_tf${TF_VERSION}"
+                    sh """#!/bin/bash
+                        set -e
+                        set -o pipefail # Ensure pytest exit code is forwarded through tee
+                        source /opt/intel/oneapi/setvars.sh intel64
+                        export BERT_OP_PATH=${WORKSPACE}/build/src/tf_op/libBertOp.so
+                        mkdir -p test_results
+                        python -m pytest --junitxml test_results/${test_results}.xml ${WORKSPACE}/tests/bert_op | tee test_results/${test_results}.log
+                    """
+                    stash includes: 'test_results/*', name: 'bert_op_tests'
+                }
+            }
+        }
+    }
+}
+
+def testStages(List env) {
+    return {
+        withEnv(env) {
+            stage("benchmark ${CXX_COMPILER} - ${TF_VERSION} - ${QUANTIZATION} - ${BFLOAT16}") {
+                dir('build') {
+                    sh "echo in build: ${WORKSPACE} \$(pwd)"
+                    unstash 'benchmark'
+                    for(a in [10, 1000].findAll{x -> !(params.NIGHTLY == null && x==1000)}) {
+                        for(BATCH_SIZE in [1, 32]) {
+                            sh """#!/bin/bash
+                                source /opt/intel/oneapi/setvars.sh intel64
+                                ./tests/benchmark/benchmark ${a} ${BATCH_SIZE} ${QUANTIZATION} ${BFLOAT16} | tee benchmark.log
+                            """
+                            sh "grep 'Average Throughput' benchmark.log | sed 's/.*Throughput: \\(.*\\)/${CXX_COMPILER}\\tbenchmark.exe ${a}\\t${TF_VERSION}\\tBERT-base\\t${QUANTIZATION}\\t${BFLOAT16}\\t${BATCH_SIZE}\\t\\1/' >> benchmark.csv"
+                            sh """#!/bin/bash
+                                source /opt/intel/oneapi/setvars.sh intel64
+                                ./tests/benchmark/benchmark ${a} ${BATCH_SIZE} ${QUANTIZATION} ${BFLOAT16} --large | tee benchmark.log
+                            """
+                            sh "grep 'Average Throughput' benchmark.log | sed 's/.*Throughput: \\(.*\\)/${CXX_COMPILER}\\tbenchmark.exe ${a}\\t${TF_VERSION}\\tBERT-large\\t${QUANTIZATION}\\t${BFLOAT16}\\t${BATCH_SIZE}\\t\\1/' >> benchmark.csv"
+                        }
+                    }
+                    stash includes: 'benchmark.csv', name: 'benchmark'
+                }
+            }
+            stage("accuracy ${CXX_COMPILER} - ${TF_VERSION} - ${QUANTIZATION} - ${BFLOAT16}"){
+                dir('build') {
+                    unstash 'accuracy'
+                    sh """#!/bin/bash
+                        export TF_VERSION=${TF_VERSION}
+                        export TF_MAJOR=${TF_VERSION.replaceFirst(/(\d+)\..*/, '$1')}
+                        export CXX_COMPILER=${CXX_COMPILER}
+                        export QUANTIZATION=${QUANTIZATION}
+                        export BFLOAT16=${BFLOAT16}
+                        export path_to_bertop=${WORKSPACE}/build/src/tf_op/libBertOp.so   # accuracy_launcher.sh will pushd
+                        export out_file=${WORKSPACE}/build/accuracy.csv                   # to its directory so use absolute
+                        base_dir=/data/tf\${TF_MAJOR}                                     # paths to external resources
+                        export Python3_EXECUTABLE=/usr/bin/python
+                        export PYTHONPATH=\${PYTHONPATH}:${WORKSPACE}/python              # Need model modifier on PYTHONPATH
+                        export TFDS_DATA_DIR=/data/tfds_data
+                        export QUANT_FACTORS_DIR=${WORKSPACE}/jenkins_resources
+
+                        source /opt/intel/oneapi/setvars.sh intel64
+                        ${WORKSPACE}/tests/tf\${TF_MAJOR}_ops_accuracy/accuracy_launcher.sh \${base_dir}
+                    """
+                    stash includes: 'accuracy.csv', name: 'accuracy'
+                }
+            }
+            if (TF_VERSION.startsWith('2'))
+            stage("model-zoo ${CXX_COMPILER} - ${TF_VERSION} - ${QUANTIZATION} - ${BFLOAT16}"){
+                dir('build') {
+                    unstash 'model_zoo'
+                    // BATCH_SIZE must divide 408 (dataset size) without a remainder
+                    def QUANT_FILES = [
+                        'BERT-base': 'quant_factors_uncased_L-12_H-768_A-12.txt',
+                        'BERT-large': 'quant_factors_uncased_L-24_H-1024_A-16.txt']
+                    def BASE_MODEL_DIRS = [
+                        'BERT-base': '/data/model_zoo/bert-base-tf2',
+                        'BERT-large': '/data/model_zoo/bert_large/uncased_L-24_H-1024_A-16'
+                    ]
+                    def ORIGINAL_MODEL_DIRS = [
+                        'BERT-base': '/data/model_zoo/frozen',
+                        'BERT-large': '/data/model_zoo/bert_large/frozen']
+                    def MODIFIED_MODEL_DIRS = [
+                        'BERT-base': '/data/model_zoo/frozen_modified',
+                        'BERT-large': '/data/model_zoo/bert_large/frozen_modified']
+                    for (MODEL in ['BERT-base', 'BERT-large']) {
+                        for (BATCH_SIZE in [1, 24]) {
+                            sh """#!/bin/bash
+                                set -e
+                                export PYTHONPATH=\${PYTHONPATH}:${WORKSPACE}/model_zoo/models/language_modeling/tensorflow/bert_large/inference
+                                export PYTHONPATH=\${PYTHONPATH}:${WORKSPACE}/python
+                                export QUANT_FACTORS_PATH=${WORKSPACE}/jenkins_resources/${QUANT_FILES[MODEL]}
+                                OUTPUT_DIR=\$(mktemp -d)
+                                GLUE_DIR=/data/tf1/download_glue/glue_data
+                                BERT_BASE_DIR=${BASE_MODEL_DIRS[MODEL]}
+                                path_to_bertop=${WORKSPACE}/build/src/tf_op/libBertOp.so
+                                source /opt/intel/oneapi/setvars.sh intel64
+                                FROZEN_DIR=${ORIGINAL_MODEL_DIRS[MODEL]}
+                                python ${WORKSPACE}/tests/model_zoo/run_model_zoo.py \
+                                --frozen_graph_path=\${FROZEN_DIR}/frozen_model.pb \
+                                --output_dir=\${OUTPUT_DIR} \
+                                --bert_config_file=\${BERT_BASE_DIR}/bert_config.json \
+                                --do_train=False \
+                                --precision=fp32 \
+                                --do_lower_case=True \
+                                --task_name=MRPC \
+                                --do_eval=true \
+                                --vocab_file=\${BERT_BASE_DIR}/vocab.txt \
+                                --data_dir=\${GLUE_DIR}/MRPC \
+                                --eval_batch_size=${BATCH_SIZE} \
+                                --experimental_gelu=False \
+                                --max_seq_length=128 \
+                                --inter_op_parallelism_threads=1 \
+                                --intra_op_parallelism_threads=18 \
+                                \${path_to_bertop} 2>&1 | tee model_zoo.log
+                                tmpdir=\$(mktemp -d)
+                                cp -R ${MODIFIED_MODEL_DIRS[MODEL]}/* \${tmpdir}/
+                                FROZEN_DIR=\${tmpdir}
+
+                                python -m model_modifier.configure_bert_op \
+                                    ${QUANTIZATION} \
+                                    ${BFLOAT16} \
+                                    --quant-factors-path=\${QUANT_FACTORS_PATH} \
+                                    \${FROZEN_DIR}/frozen_graph.pb
+
+                                python ${WORKSPACE}/tests/model_zoo/run_model_zoo.py \
+                                --frozen_graph_path=\${FROZEN_DIR}/frozen_graph.pb \
+                                --output_dir=\${OUTPUT_DIR} \
+                                --bert_config_file=\${BERT_BASE_DIR}/bert_config.json \
+                                --do_train=False \
+                                --precision=fp32 \
+                                --do_lower_case=True \
+                                --task_name=MRPC \
+                                --do_eval=true \
+                                --vocab_file=\${BERT_BASE_DIR}/vocab.txt \
+                                --data_dir=\${GLUE_DIR}/MRPC \
+                                --eval_batch_size=${BATCH_SIZE} \
+                                --experimental_gelu=False \
+                                --max_seq_length=128 \
+                                --inter_op_parallelism_threads=1 \
+                                --intra_op_parallelism_threads=18 \
+                                \${path_to_bertop} 2>&1 | tee -a model_zoo.log
+                            """
+                            sh """
+                                model_zoo1=\$(grep -m1 'w:  eval_accuracy ' model_zoo.log | sed 's/.*= \\(.*\\)/'${CXX_COMPILER}'\tfrozen\t'${TF_VERSION}'\t'${MODEL}'\t'${QUANTIZATION}'\t'${BFLOAT16}'\t'${BATCH_SIZE}'\t\\1/' )
+                                model_zoo2=\$(grep -m1 'Throughput is ' model_zoo.log | sed 's/.*is \\(.*\\)/\\1/' )
+                                model_zoo3=\$(grep 'w:  eval_accuracy ' model_zoo.log | sed 's/.*= \\(.*\\)/'${CXX_COMPILER}'\tfrozen_modified\t'${TF_VERSION}'\t'${MODEL}'\t'${QUANTIZATION}'\t'${BFLOAT16}'\t'${BATCH_SIZE}'\t\\1/' | tail -1)
+                                model_zoo4=\$(grep 'Throughput is ' model_zoo.log | sed 's/.*is \\(.*\\)/\\1/' | tail -1)
+                                echo "\$model_zoo1\t\$model_zoo2" >> model_zoo.csv
+                                echo "\$model_zoo3\t\$model_zoo4" >> model_zoo.csv
+                            """
+                        }
+                    }
+                    stash includes: 'model_zoo.csv', name: 'model_zoo'
+                }
+            }
+        }
+    }
+}
+
+def buildDockerfile(List TF_VERSION) {
+    TF_VERSION.each { tf ->
+    // tf 1.15 works with python3.6 only
+    docker.build("${IMAGE_NAME}:${tf}", "--target=base \
+                                    --build-arg TF_VERSION=${tf} \
+                                    --build-arg TF_requirements=requirements-tf${tf.replaceFirst(/(\d+)\..*/, '$1')}.txt \
+                                    --build-arg PYTHON_VERSION=${tf.startsWith('1') ? "3.6" : "3.9"} \
+                                    --build-arg username=\$(id -un)  --build-arg userid=\$(id -u) --build-arg usergroup=\$(id -g) \
+                                    -f Dockerfile/Dockerfile-ci .")
+    }
+}
+// </stages initialized here>
+
+// stages will not be aborted when one of them fails
+Map tasks = [failFast: false]
+
+for(Map ct_axis in ct_axes) {
+    List ct_axisEnv = ct_axis.collect { k, v ->
+        "${k}=${v}"
+    }
+
+    tasks[ct_axisEnv.join(', ')] = { ->
+        withEnv(ct_axisEnv) {
+            node(null) {
+                checkout scm
+                docker.image("${IMAGE_NAME}:${TF_VERSION}").inside("--cpuset-cpus=0-10 --init -v ${jenkins_data}:/data") {
+                    buildStages(ct_axisEnv).call()
+                    if (params.NIGHTLY != null || CXX_COMPILER == "icpc") {
+                        for(Map rt_axis in rt_axes) {
+                            List rt_axisEnv = rt_axis.collect { k, v ->
+                                "${k}=${v}"
+                            }
+                            testStages(ct_axisEnv + rt_axisEnv).call()
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+stage("Matrix builds") {
+    prepareReports().call()
+    node(null) {
+        checkout scm
+        buildDockerfile(ct_axes.collect{tf -> tf['TF_VERSION']}.unique())
+    }
+    parallel(tasks)
+    publishReports().call()
+}
