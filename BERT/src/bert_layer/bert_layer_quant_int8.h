@@ -20,6 +20,7 @@
 #include <cmath>
 #include <cassert>
 #include <limits>
+#include <map>
 #include <memory>
 #include <tuple>
 #include <type_traits>
@@ -37,9 +38,57 @@ class BertLayer
         dt dst_dt;
     };
 
+    enum class Ops {
+        query,
+        key,
+        value,
+        batchMatMul1,
+        softmax,
+        batchMatMul2,
+        attentionOut,
+        norm1,
+        intermediate,
+        output,
+        norm2
+    };
+
+    static const std::map<Ops, std::string>& OpsToNames() {
+        #define BERT_OP_PAIR(x) {Ops::x, #x}
+        static const std::map<Ops, std::string> opsToNames {
+            BERT_OP_PAIR(query),
+            BERT_OP_PAIR(key),
+            BERT_OP_PAIR(value),
+            BERT_OP_PAIR(batchMatMul1),
+            BERT_OP_PAIR(softmax),
+            BERT_OP_PAIR(batchMatMul2),
+            BERT_OP_PAIR(attentionOut),
+            BERT_OP_PAIR(norm1),
+            BERT_OP_PAIR(intermediate),
+            BERT_OP_PAIR(output),
+            BERT_OP_PAIR(norm2)
+        };
+        #undef BERT_OP_PAIR
+        return opsToNames;
+    }
+
 public:
     static constexpr int head_size = BertContext::head_size;
     static constexpr float outputQuantizationAccuracyFactor = 3.f;
+
+    static std::vector<std::string> OpNames() {
+        static auto& opsToNames = OpsToNames();
+
+        std::vector<std::string> result;
+        result.reserve(opsToNames.size());
+
+        std::transform(
+            std::begin(opsToNames),
+            std::end(opsToNames),
+            std::back_inserter(result),
+            [](const auto& pair) { return pair.second; });
+
+        return result;
+    }
 
     // ctx->hiddenSize 768 Hidden layer neurons, number of hidden units
     // ctx->intermediateSize 3072 feed-forward/filter size dimension 4*ctx->hiddenSize 
@@ -171,6 +220,7 @@ public:
     void forward(dnnl::memory inputBufferMem, const dnnl::memory& input_mask) {
         using namespace dnnl_wrappers;
         auto& stm = ctx->dnnl_context.getEngineStream();
+        static auto& opsToNames = OpsToNames();
 
         dnnl::memory::dims input_dims = {ctx->batch_ * ctx->maxTokenSize, ctx->hiddenSize};
         inputBufferMem = ReshapeMemory(inputBufferMem, input_dims);
@@ -183,14 +233,19 @@ public:
         auto qkv_SrcData = queryIPDesc.ScaledCachedData(inputBufferMem);
 
         // Query
-        queryIPDesc.Compute(stm, qkv_SrcData, ctx->query);
+        ctx->profiler.Profile(opsToNames.at(Ops::query), [&](){
+                queryIPDesc.Compute(stm, qkv_SrcData, ctx->query);
+        });
 
         // Key
-        keyIPDesc.Compute(stm, qkv_SrcData, ctx->key);
+        ctx->profiler.Profile(opsToNames.at(Ops::key), [&](){
+            keyIPDesc.Compute(stm, qkv_SrcData, ctx->key);
+        });
 
         // Value
-        valueIPDesc.Compute(stm, qkv_SrcData, ctx->value);
-
+        ctx->profiler.Profile(opsToNames.at(Ops::value), [&](){
+            valueIPDesc.Compute(stm, qkv_SrcData, ctx->value);
+        });
 
         // Batch MatMul1 with bias and scale
         auto reshaped_input_mask = ReshapeMemory(input_mask, MaskDescriptor().dims());
@@ -200,12 +255,16 @@ public:
         auto batchMatMul1_MaskData = DataSource(reshaped_input_mask);
 
         std::unordered_map<int, std::reference_wrapper<DataSource>> post_ops_data = {{0, std::ref(batchMatMul1_MaskData)}};
-        batchMatMul1ScaleBias_->ComputeWithPostOps(stm, batchMatMul1_QData, batchMatMul1_KData, post_ops_data,
+        ctx->profiler.Profile(opsToNames.at(Ops::batchMatMul1), [&](){
+            batchMatMul1ScaleBias_->ComputeWithPostOps(stm, batchMatMul1_QData, batchMatMul1_KData, post_ops_data,
                                                 ctx->qk_resultBuffer);
+        });
 
         // Softmax
         auto qk_resultData = DataSource(ctx->qk_resultBuffer);
-        softmax_->Compute(stm, qk_resultData, ctx->qk_resultBuffer);
+        ctx->profiler.Profile(opsToNames.at(Ops::softmax), [&](){
+            softmax_->Compute(stm, qk_resultData, ctx->qk_resultBuffer);
+        });
 
         // Batch MatMul2
         auto batchMatMul2_desc = batchMatMul2_->PrimDesc();
@@ -214,19 +273,27 @@ public:
         auto batchMatMul2_BData  = DataSource();
         auto batchMatMul2_DMem = ReLayoutMemory(ctx->resultBuffer1, batchMatMul2_desc.dst_desc());
 
-        batchMatMul2_->Compute(stm, batchMatMul2_QKData, batchMatMul2_VData, batchMatMul2_BData, batchMatMul2_DMem);
+        ctx->profiler.Profile(opsToNames.at(Ops::batchMatMul2), [&](){
+            batchMatMul2_->Compute(stm, batchMatMul2_QKData, batchMatMul2_VData, batchMatMul2_BData, batchMatMul2_DMem);
+        });
 
         // Attention Output
         auto attentionOut_SrcData = attentionOutIPDesc.ScaledData(ctx->resultBuffer1);
-        attentionOutIPDesc.Compute(stm, attentionOut_SrcData, inputBufferMem);
+        ctx->profiler.Profile(opsToNames.at(Ops::attentionOut), [&](){
+            attentionOutIPDesc.Compute(stm, attentionOut_SrcData, inputBufferMem);
+        });
 
         // Norm 1
         auto inputBufferData = DataSource(inputBufferMem);
-        Norm1_->Compute(stm, inputBufferData, gamma1, beta1, inputBufferMem);
+        ctx->profiler.Profile(opsToNames.at(Ops::norm1), [&](){
+            Norm1_->Compute(stm, inputBufferData, gamma1, beta1, inputBufferMem);
+        });
 
         // Intermediate with Erf
         auto intermediate_SrcData = intermediateIPDesc.ScaledData(inputBufferMem);
-        intermediateIPDesc.Compute(stm, intermediate_SrcData, ctx->intermediateBuffer(intermediateBufType));
+        ctx->profiler.Profile(opsToNames.at(Ops::intermediate), [&](){
+            intermediateIPDesc.Compute(stm, intermediate_SrcData, ctx->intermediateBuffer(intermediateBufType));
+        });
 
         if (ctx->calibrate_quant_factors)
         {
@@ -237,10 +304,14 @@ public:
 
         // Output MatMul with Sum
         auto output_SrcData = DataSource(ctx->intermediateBuffer(intermediateBufType));
-        outputIPDesc.Compute(stm, output_SrcData, inputBufferMem);
+        ctx->profiler.Profile(opsToNames.at(Ops::output), [&](){
+            outputIPDesc.Compute(stm, output_SrcData, inputBufferMem);
+        });
 
         // Output Norm
-        Norm2_->Compute(stm, inputBufferData, gamma2, beta2, inputBufferMem);
+        ctx->profiler.Profile(opsToNames.at(Ops::norm2), [&](){
+            Norm2_->Compute(stm, inputBufferData, gamma2, beta2, inputBufferMem);
+        });
     }
 
     const QuantizationFactors& QuantFactors()

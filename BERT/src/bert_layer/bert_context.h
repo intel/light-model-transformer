@@ -6,6 +6,7 @@
 #define BERT_CONTEXT_H_
 
 #include "dnnl_common.h"
+#include "bert_profiler.hpp"
 
 #include <cstdlib>
 #include <omp.h>
@@ -105,6 +106,7 @@ public:
     bool use_bfloat16;
     bool calibrate_quant_factors;
     DnnlCommon dnnl_context;
+    BertProfiler profiler;
 
     // Store the result of input*qkvWeight
     dnnl::memory query;

@@ -208,6 +208,11 @@ void benchmark(float *input, const Config& config)
       return result;
     }(input_buffer);
 
+    if (i == warmupTimes)
+    {
+      ctx->profiler.Start(BertLayer::OpNames());
+    }
+
     auto start = std::chrono::steady_clock::now();
     for (int j = 0; j < config.layers; ++j)
     {
@@ -237,6 +242,21 @@ void benchmark(float *input, const Config& config)
   std::stringstream ss;
   ss << std::fixed << std::setprecision(2) << "Average Time: " << average_time_ms.count() << " ms" << std::endl;
   ss << std::fixed << std::setprecision(2) << "Average Throughput: " << throughput_per_s << " samples/s" << std::endl;
+  ss << "Profile data:" << std::endl;
+  ss << std::setw(14) << "operation" 
+     << std::setw(12) << "min" 
+     << std::setw(12) << "max" 
+     << std::setw(12) << "average"
+     << std::endl;
+  for (auto& name : BertLayer::OpNames()) {
+    auto& counter = ctx->profiler.counters_[name];
+    ss << std::fixed << std::setprecision(6)
+       << std::setw(14) << name
+       << std::setw(12) << counter.min 
+       << std::setw(12) << counter.max 
+       << std::setw(12) << counter.total / counter.iterations
+       << std::endl;
+  }
   std::cout << ss.str();
 }
 
