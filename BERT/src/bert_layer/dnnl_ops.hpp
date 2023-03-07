@@ -141,16 +141,65 @@ MatMul MakeMatMul(const dnnl::engine& eng, int batch, int m, int n, int k, const
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // InnerProduct
+
+template <class PrimType>
+PrimType BuildInnerProductPrim(
+    const dnnl::engine& eng,
+    const dnnl::memory::desc& src_md,
+    const dnnl::memory::desc& weights_md,
+    const dnnl::memory::desc& bias_md, 
+    const dnnl::memory::desc& dst_md,
+    const dnnl::primitive_attr& attr);
+
+template <>
+dnnl::inner_product_forward BuildInnerProductPrim<dnnl::inner_product_forward>(
+    const dnnl::engine& eng,
+    const dnnl::memory::desc& src_md,
+    const dnnl::memory::desc& weights_md,
+    const dnnl::memory::desc& bias_md,
+    const dnnl::memory::desc& dst_md,
+    const dnnl::primitive_attr& attr) {
+    return dnnl::inner_product_forward{
+            dnnl::inner_product_forward::primitive_desc{
+                dnnl::inner_product_forward::desc{
+                    dnnl::prop_kind::forward_inference,
+                    src_md,
+                    weights_md,
+                    bias_md,
+                    dst_md},
+                attr,
+                eng
+            }};
+}
+
+template <>
+dnnl::convolution_forward BuildInnerProductPrim<dnnl::convolution_forward>(
+    const dnnl::engine& eng,
+    const dnnl::memory::desc& src_md,
+    const dnnl::memory::desc& weights_md,
+    const dnnl::memory::desc& bias_md,
+    const dnnl::memory::desc& dst_md,
+    const dnnl::primitive_attr& attr) {
+    return dnnl::convolution_forward{
+            dnnl::convolution_forward::primitive_desc{
+                dnnl::convolution_forward::desc{
+                    dnnl::prop_kind::forward_inference,
+                    dnnl::algorithm::convolution_direct,
+                    src_md, weights_md, bias_md, dst_md, {1,1}, {0,0}, {0,0}},
+                attr,
+                eng
+            }};
+}
+
+
+template <class PrimType>
 class InnerProduct {
 public:
     InnerProduct(const dnnl::engine& eng,
         const dnnl::memory::desc& src_md, const dnnl::memory::desc& weights_md,
         const dnnl::memory::desc& bias_md, const dnnl::memory::desc& dst_md,
         const dnnl::primitive_attr& attr)
-        : prim_{dnnl::inner_product_forward::primitive_desc{
-            dnnl::inner_product_forward::desc{dnnl::prop_kind::forward_inference, src_md, weights_md, bias_md, dst_md},
-            attr,
-            eng}} {
+        : prim_{BuildInnerProductPrim<PrimType>(eng, src_md, weights_md, bias_md, dst_md, attr)} {
     }
 
     InnerProduct(const dnnl::primitive& prim) : prim_(prim) {}
@@ -213,9 +262,9 @@ public:
         stm.wait();
     }
 
-    dnnl::inner_product_forward::primitive_desc PrimDesc() const {
+    typename PrimType::primitive_desc PrimDesc() const {
         auto c_desc = prim_.get_primitive_desc();
-        return dnnl::inner_product_forward::primitive_desc{const_cast<dnnl_primitive_desc_t>(c_desc)};
+        return typename PrimType::primitive_desc{const_cast<dnnl_primitive_desc_t>(c_desc)};
     }
 
     const dnnl::primitive& Prim() const {
@@ -227,44 +276,88 @@ private:
 };
 
 struct InnerProductDims {
-    InnerProductDims(int batch, int m, int n, int k)
-        : src_tz{batch * m, k}
-        , weights_tz{n, k}
-        , bias_tz{n}
-        , dst_tz{batch * m, n} {}
-
     dnnl::memory::dims src_tz;
     dnnl::memory::dims weights_tz;
     dnnl::memory::dims bias_tz;
     dnnl::memory::dims dst_tz;
+
+    dnnl::memory::format_tag src_fmt;
+    dnnl::memory::format_tag weights_fmt;
+    dnnl::memory::format_tag bias_fmt;
+    dnnl::memory::format_tag dst_fmt;
 };
 
-inline InnerProduct MakeInnerProduct(const dnnl::engine& eng, int batch, int m, int n, int k, 
+template <class PrimType>
+InnerProductDims MakeInnerProductDims(int batch, int m, int n, int );
+
+template <>
+InnerProductDims MakeInnerProductDims<dnnl::inner_product_forward>(int batch, int m, int n, int k) {
+    return {
+        {batch * m, k}, // src_tz
+        {n, k},         // weights_tz
+        {n},            // bias_tz
+        {batch * m, n}, // dst_tz
+
+        dnnl::memory::format_tag::nc,  // src_fmt
+        dnnl::memory::format_tag::any, // weights_fmt
+        dnnl::memory::format_tag::any, // bias_fmt
+        dnnl::memory::format_tag::nc   // dst_fmt
+    };
+}
+
+template <>
+InnerProductDims MakeInnerProductDims<dnnl::convolution_forward>(int batch, int m, int n, int k) {
+    return {
+        {1, k, batch * m}, // src_tz
+        {n, k, 1},         // weights_tz
+        {n},               // bias_tz
+        {1, n, batch * m}, // dst_tz
+
+        dnnl::memory::format_tag::nwc, // src_fmt
+        dnnl::memory::format_tag::any, // weights_fmt
+        dnnl::memory::format_tag::any, // bias_fmt
+        dnnl::memory::format_tag::nwc  // dst_fmt
+    };
+}
+
+#define PERMUTE_ACBD {0,2,1,3}
+#define PERMUTE_ADBC {0,3,1,2}
+#define PERMUTE_NHWC PERMUTE_ACBD
+#define PERMUTE_ACB  {0,2,1}
+#define PERMUTE_NWC PERMUTE_ACB
+
+inline dnnl::memory::desc ConvertIPDataDims(const dnnl::memory::desc& md, size_t dims_num) {
+    // to be synchronized with MakeInnerProductDims<dnnl::convolution_forward>()
+    const auto src_dims = md.dims();
+    const auto src_dims_num = src_dims.size();
+
+    if (src_dims_num == dims_num) {
+        return md;
+    } else if (src_dims_num == 4 && dims_num == 2) {
+        return md.reshape({src_dims[1], src_dims[2]}).permute_axes({1,0});
+    } else if (src_dims_num == 2 && dims_num == 4) {
+        return md.reshape({1, src_dims[0], src_dims[1], 1}).permute_axes(PERMUTE_NHWC);
+    } else if (src_dims_num == 3 && dims_num == 2) {
+        return md.reshape({src_dims[1], src_dims[2]}).permute_axes({1,0});
+    } else if (src_dims_num == 2 && dims_num == 3) {
+        return md.reshape({1, src_dims[0], src_dims[1]}).permute_axes(PERMUTE_NWC);
+    }
+    throw std::runtime_error("Unsupported dimensions conversion from " + std::to_string(src_dims_num) + " to " + std::to_string(dims_num));
+}
+
+template <class PrimType = dnnl::inner_product_forward>
+InnerProduct<PrimType> MakeInnerProduct(const dnnl::engine& eng, int batch, int m, int n, int k, 
                         dnnl::memory::data_type src_dt, dnnl::memory::data_type weights_dt,
                         dnnl::memory::data_type bias_dt, dnnl::memory::data_type dst_dt,
                         const dnnl::primitive_attr& attr = {}) {
+    const auto dims = MakeInnerProductDims<PrimType>(batch, m, n, k);
 
-    const InnerProductDims dims{batch, m, n, k};
+    const auto src_md     = dnnl::memory::desc(dims.src_tz , src_dt, dims.src_fmt);
+    const auto weights_md = dnnl::memory::desc(dims.weights_tz, weights_dt, dims.weights_fmt);
+    const auto bias_md    = dnnl::memory::desc(dims.bias_tz, bias_dt, dims.bias_fmt);
+    const auto dst_md     = dnnl::memory::desc(dims.dst_tz, dst_dt, dims.dst_fmt);
 
-    // plain memory format can be defined using empty strides argument
-    dnnl::memory::dims plain{};
-    using fmt = dnnl::memory::format_tag;
-
-    const auto src_md     = dnnl::memory::desc(dims.src_tz , src_dt, plain);
-    const auto weights_md = dnnl::memory::desc(dims.weights_tz, weights_dt, fmt::any);
-    const auto bias_md    = dnnl::memory::desc(dims.bias_tz, bias_dt, plain);
-    const auto dst_md     = dnnl::memory::desc(dims.dst_tz, dst_dt, plain);
-
-    return InnerProduct{eng, src_md, weights_md, bias_md, dst_md, attr};
-}
-
-template <typename T_src, typename T_wei, typename T_bias, typename T_dst>
-InnerProduct MakeInnerProduct(const dnnl::engine& eng, int batch, int m, int n, int k, const dnnl::primitive_attr& attr = {}) {
-    const auto src_dt = DnnlDataType<T_src>::value;
-    const auto weights_dt = DnnlDataType<T_wei>::value;
-    const auto bias_dt = DnnlDataType<T_bias>::value;
-    const auto dst_dt = DnnlDataType<T_dst>::value;
-    return MakeInnerProduct(eng, batch, m, n, k, src_dt, weights_dt, bias_dt, dst_dt, attr);
+    return InnerProduct<PrimType>{eng, src_md, weights_md, bias_md, dst_md, attr};
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -346,7 +439,7 @@ public:
         const auto src_md = prim_desc.src_desc();
         auto src_memory = src.GetData(stm, src_md);
 
-        const auto scaleshift_md = dnnl::memory::desc{{1, src_md.dims().back()}, dnnl::memory::data_type::f32, dnnl::memory::dims{}};
+        const auto scaleshift_md = dnnl::memory::desc{{1, src_md.dims().at(1)}, dnnl::memory::data_type::f32, dnnl::memory::dims{}};
         auto scale_memory = scale.GetData(stm, scaleshift_md);
         auto shift_memory = shift.GetData(stm, scaleshift_md);
 

@@ -195,18 +195,7 @@ void benchmark(float *input, const Config& config)
   {
     dnnl::memory::dims dims{config.batch * config.maxTokenSize, config.hiddenSize};
     auto input_buffer = dnnl_wrappers::AttachMemory(ctx->dnnl_context.getEngine(), dims, input, false);
-    auto buffer = [&ctx](dnnl::memory& input) -> dnnl::memory {
-      auto input_md = input.get_desc();
-      if (input_md.data_type() == ctx->FloatType()) {
-        return input;
-      }
-
-      dnnl::memory::desc result_md{input_md.dims(), ctx->FloatType(), dnnl::memory::dims{}};
-      dnnl::memory result{result_md, ctx->dnnl_context.getEngine()};
-      dnnl::reorder{input, result}.execute(ctx->dnnl_context.getEngineStream(), input, result);
-      ctx->dnnl_context.getEngineStream().wait();
-      return result;
-    }(input_buffer);
+    auto buffer = bert_layers.front()->PrepareInput(input_buffer);
 
     if (i == warmupTimes)
     {

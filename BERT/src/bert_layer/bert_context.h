@@ -14,9 +14,8 @@
 #include <memory>
 #include <cassert>
 
-#define QUANT_INT8
 
-class BertContext {
+class BertContext : public std::enable_shared_from_this<BertContext> {
 
     using dt = dnnl::memory::data_type;
     using dims = dnnl::memory::dims;
@@ -42,15 +41,6 @@ public:
         , use_quantization{use_quantization}
         , use_bfloat16{use_bfloat16}
         , calibrate_quant_factors{calibrate_quant_factors}
-        , query{dnnl::memory::desc{{batch * maxTokenSize, hiddenSize}, FloatType(), dims{}}, dnnl_context.getEngine()}
-        , key  {dnnl::memory::desc{{batch * maxTokenSize, hiddenSize}, FloatType(), dims{}}, dnnl_context.getEngine()}
-        , value{dnnl::memory::desc{{batch * maxTokenSize, hiddenSize}, FloatType(), dims{}}, dnnl_context.getEngine()}
-        , resultBuffer1{dnnl::memory::desc{{batch * maxTokenSize, hiddenSize}, FloatType(), dims{}}, dnnl_context.getEngine()}
-        , qk_resultBuffer{dnnl::memory::desc{{batch, hiddenSize / head_size, maxTokenSize, maxTokenSize}, FloatType(), dims{}}, dnnl_context.getEngine()}
-        , intermediateBuffers_{{
-            UnsignedQuantizationType(),
-            dnnl::memory{dnnl::memory::desc{{batch * maxTokenSize, intermediateSize}, UnsignedQuantizationType(), dims{}}, dnnl_context.getEngine()}
-          }}
         , scratchpadBuffer_{std::make_shared<dnnl::memory>()}
     {
         assert(hiddenSize % head_size == 0);
@@ -58,22 +48,61 @@ public:
 
     dnnl::memory::data_type   SignedQuantizationType() const { return use_quantization ? dt::s8 : FloatType(); }
     dnnl::memory::data_type UnsignedQuantizationType() const { return use_quantization ? dt::u8 : FloatType(); }
-    dnnl::memory::data_type QuantizationType() const { return use_quantization ? dt::s8 : FloatType(); }
 
     dnnl::memory::data_type FloatType() const { return use_bfloat16 ? dt::bf16 : dt::f32; }
 
-    // rfsaliev: there are just 1 or 2 elements expected in intermediateBuffers_
-    // std::map or std::unordered_map are too 'heavy' for such simple case
-    dnnl::memory& intermediateBuffer(dnnl::memory::data_type atype) {
-        // just do not want to use std::find_if()
-        for (auto& p : intermediateBuffers_) {
-            if (p.first == atype) {
-                return p.second;
+    class BufferHandler {
+        friend class BertContext;
+        BufferHandler(std::weak_ptr<BertContext> mgr, dnnl::memory buf, dnnl::memory::desc md)
+            : mgr_{std::move(mgr)}
+            , buffer_{std::move(buf)}
+            , memory_{md, buffer_.get_engine(), buffer_.get_data_handle()}
+        {}
+    public:
+        BufferHandler(const BufferHandler&) = delete;
+        BufferHandler& operator=(const BufferHandler&) = delete;
+        BufferHandler(BufferHandler&&) = default;
+        BufferHandler& operator=(BufferHandler&&) = default;
+        ~BufferHandler() {
+            if (auto mgr = mgr_.lock()) {
+                mgr->PushBuffer(buffer_);
             }
         }
-        // no buffer found for dt - construct, add and return
-        intermediateBuffers_.emplace_back(atype, dnnl::memory{dnnl::memory::desc{{batch_ * maxTokenSize, intermediateSize}, atype, dims{}}, dnnl_context.getEngine()});
-        return intermediateBuffers_.back().second;
+
+        dnnl::memory& get() { return memory_; }
+        const dnnl::memory& get() const { return memory_; }
+        operator dnnl::memory&() { return get(); }
+        operator const dnnl::memory&() const { return get(); }
+
+    private:
+        std::weak_ptr<BertContext> mgr_;
+        dnnl::memory buffer_;
+        dnnl::memory memory_;
+    };
+
+    BufferHandler PopBuffer(const dnnl::memory::desc& md) {
+        using memory = dnnl::memory;
+        auto buf_size = md.get_size();
+        auto it = buffers_.find(buf_size);
+        memory buffer;
+        if (it != buffers_.end()) {
+            buffer = it->second;
+            buffers_.erase(it);
+        } else {
+            buffer = {
+                memory::desc{
+                    memory::dims{static_cast<memory::dim>(buf_size)},
+                    memory::data_type::u8,
+                    memory::format_tag::a
+                },
+                dnnl_context.getEngine()
+            };
+        }
+        return BufferHandler{shared_from_this(), buffer, md};
+    }
+
+    void PushBuffer(const dnnl::memory& mem) {
+        buffers_.emplace(mem.get_desc().get_size(), mem);
     }
 
     // dnnl::memory is actually shared pointer to a buffer
@@ -108,17 +137,8 @@ public:
     DnnlCommon dnnl_context;
     BertProfiler profiler;
 
-    // Store the result of input*qkvWeight
-    dnnl::memory query;
-    dnnl::memory key;
-    dnnl::memory value;
-    // Buffer like the dimesion of 128x768
-    dnnl::memory resultBuffer1;
-    // Store the BatchMatMul result of query and key
-    dnnl::memory qk_resultBuffer;
 private:
-    // Buffer to store the result of intermediate
-    std::vector<std::pair<dt, dnnl::memory>> intermediateBuffers_;
+    std::unordered_multimap<size_t, dnnl::memory> buffers_;
     std::shared_ptr<dnnl::memory> scratchpadBuffer_;
 };
 

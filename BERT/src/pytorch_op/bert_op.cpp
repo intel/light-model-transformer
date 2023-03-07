@@ -205,31 +205,14 @@ torch::Tensor BertOp::Forward(torch::Tensor embeddings, torch::Tensor attention_
 {
     auto embedding_input = TensorAdapter::AsDnnlMemory(embeddings, context_->dnnl_context.getEngine());
     auto input_mask = TensorAdapter::AsDnnlMemory(attention_mask, context_->dnnl_context.getEngine());
-
-    auto input = [this](dnnl::memory& input) -> dnnl::memory {
-        auto input_md = input.get_desc();
-        if (input_md.data_type() == context_->FloatType()) {
-            return input;
-        }
-
-        dnnl::memory::desc result_md{input_md.dims(), context_->FloatType(), dnnl::memory::dims{}};
-        dnnl::memory result{result_md, context_->dnnl_context.getEngine()};
-        dnnl::reorder{input, result}.execute(context_->dnnl_context.getEngineStream(), input, result);
-        context_->dnnl_context.getEngineStream().wait();
-        return result;
-    }(embedding_input);
-
+    auto input = this->layers_.front()->PrepareInput(embedding_input);
 
     for (const auto& bert_layer : this->layers_)
     {
         bert_layer->forward(input, input_mask);
     }
 
-    if (embedding_input != input) {
-        dnnl::reorder{input, embedding_input}.execute(context_->dnnl_context.getEngineStream(), input, embedding_input);
-        context_->dnnl_context.getEngineStream().wait();
-    }
-
+    this->layers_.back()->ProcessResult(input, embedding_input);
     return embeddings;
 }
 
