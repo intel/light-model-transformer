@@ -48,6 +48,7 @@ def run_benchmark(model: transformers.BertModel, data: torch.Tensor,
         elapsed_time_seconds = 0.
         num_runs = 0
         while elapsed_time_seconds < run_time_seconds:
+            log.debug(f'Running iteration {num_runs}, elapsed time {elapsed_time_seconds}')
             elapsed_time_seconds += timed_run(model, data)
             num_runs += 1
         return elapsed_time_seconds, num_runs
@@ -55,6 +56,7 @@ def run_benchmark(model: transformers.BertModel, data: torch.Tensor,
     def run_for_iterations(model: transformers.BertModel, data: torch.Tensor, iterations: int):
         elapsed_time_seconds = 0.
         for _ in range(iterations):
+            log.debug(f'Running iteration {_}, elapsed time {elapsed_time_seconds}')
             elapsed_time_seconds += timed_run(model, data)
 
         return elapsed_time_seconds, iterations
@@ -91,13 +93,13 @@ def run_benchmark(model: transformers.BertModel, data: torch.Tensor,
 
         # Benchmark runs
         log.info(f'Running benchmark cycles for {benchmark_iterations} iterations.')
-        total_time_seconds, num_runs = run_for_seconds(
+        total_time_seconds, num_runs = run_for_iterations(
             model, data, benchmark_iterations)
 
     average_time = total_time_seconds / num_runs
     average_throughput = batch_size / average_time
 
-    return average_throughput
+    return average_throughput, average_time
 
 
 def vanilla_model(args):
@@ -109,7 +111,7 @@ def vanilla_model(args):
         args.model, config=config)
     model.eval()
 
-    data = get_data(model, args.batch_size)
+    data = get_data(model, args)
 
     with torch.no_grad():
         model = torch.jit.trace(model, data, strict=False)
@@ -137,7 +139,7 @@ def ipex_model(args):
         args.model, config=config)
     model.eval()
 
-    data = get_data(model, args.batch_size)
+    data = get_data(model, args)
 
     model = ipex.optimize(model, dtype=torch.float32,
                           level="O1", auto_kernel_selection=True)
@@ -184,10 +186,9 @@ def ipex_bert_op_model(args):
     return model
 
 
-def get_data(model, batch_size):
-    seq_length = model.config.max_position_embeddings
+def get_data(model, args):
     vocab_size = model.config.vocab_size
-    data = torch.randint(vocab_size, size=[batch_size, seq_length])
+    data = torch.randint(vocab_size, size=[args.batch_size, args.seq_len])
     return data
 
 
@@ -201,7 +202,7 @@ model_func = {
 
 def main(args):
     model = model_func[(args.ipex, args.bert_op)](args)
-    data = get_data(model, args.batch_size)
+    data = get_data(model, args)
 
     results = pd.DataFrame(
         columns=['Model',
@@ -210,24 +211,27 @@ def main(args):
                  'Quantization',
                  'BFloat16',
                  'Batch Size',
+                 'Seq Len',
                  'Throughput [samples/s]',
                  'Latency [ms]'])
 
-    throughput = run_benchmark(
+    throughput, latency = run_benchmark(
         model, data, args.run_time, args.warmup_time, args.iterations, args.warmup_iterations)
 
-    results = results.append({
+    row = pd.Series({
         'Model': args.model,
         'IPEX': str(args.ipex),
         'BERT Op': str(args.bert_op),
         'Quantization': str(args.quantization),
         'BFloat16': str(args.bf16),
         'Batch Size': args.batch_size,
-        'Throughput [samples/s]': throughput,
-        'Latency [ms]': f'{1. / throughput * 1000} ms' if args.batch_size == 1 else 'N/A'
-    }, ignore_index=True)
+        'Seq Len': args.seq_len,
+        'Throughput [samples/s]': f'{throughput:.3f}',
+        'Latency [ms]': f'{latency * 1000 :.3f} ms'
+    })
+    results = pd.concat([results, row.to_frame().T], ignore_index=True)
 
-    print(results)
+    print(results.to_markdown())
 
 
 if __name__ == "__main__":
@@ -248,6 +252,8 @@ if __name__ == "__main__":
 
     parser.add_argument('-B', '--batch-size', type=int,
                         default=1, help='Batch size to benchmark')
+    parser.add_argument('-s', '--seq-len', type=int,
+                        default=128, help='Sequence length of the data')
 
     parser.add_argument('-r', '--run-time', type=float,
                         help='Time in seconds to run the benchmark for. Cannot be used together with --iterations')

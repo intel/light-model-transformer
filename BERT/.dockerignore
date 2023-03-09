@@ -11,7 +11,9 @@
 **/*.*proj.user
 **/*.dbmdl
 **/*.jfm
+**/__pychache__
 **/bin
+**/build
 **/charts
 **/docker-compose*
 **/compose*

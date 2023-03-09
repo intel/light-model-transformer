@@ -31,6 +31,10 @@ target_include_directories(${TARGET}
     PUBLIC include
 )
 
+set_target_properties(${TARGET} PROPERTIES
+    CXX_STANDARD_REQUIRED TRUE
+    CXX_STANDARD 14)
+
 target_link_libraries(${TARGET} PUBLIC BertLayer)
 
 target_link_libraries(${TARGET} PUBLIC DNNL::dnnl)
