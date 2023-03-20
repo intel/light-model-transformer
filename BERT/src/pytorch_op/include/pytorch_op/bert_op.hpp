@@ -1,7 +1,9 @@
 #ifndef LIBRARIES_AI_PERFORMANCE_MODELS_BERT_TENSOR_VALIDATOR_H
 #define LIBRARIES_AI_PERFORMANCE_MODELS_BERT_TENSOR_VALIDATOR_H
 
-#include <torch/torch.h>
+
+#include <torch/script.h>
+#include <torch/custom_class.h>
 
 #include <oneapi/dnnl/dnnl.hpp>
 

@@ -172,6 +172,19 @@ def bert_op_model(args):
         args.model, config=config)
     model.eval()
 
+
+    data = get_data(model, args)
+    with torch.no_grad():
+        model = torch.jit.trace(model, data, strict=False)
+        model = torch.jit.freeze(model)
+        # Run inference twice to initialize the optimizations
+        model(data)
+        model(data)
+    
+    model.config = config  # we restore the config after tracing so
+    # that get_data() can read the vocab size and
+    # max seq len from the model
+
     return model
 
 

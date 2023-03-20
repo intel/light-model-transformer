@@ -5,8 +5,6 @@
 
 #include <oneapi/dnnl/dnnl.hpp>
 
-#include <torch/torch.h>
-
 #include <vector>
 #include <algorithm>
 
