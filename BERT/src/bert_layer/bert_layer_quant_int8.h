@@ -129,10 +129,10 @@ public:
         valueIPDesc = BuildInnerProduct(op_data_types, m, n, k, quant_factors_.qkv, _valueWeight, _valueBias);
 
         // Batch MatMul1 with bias and scale construction
-        batchMatMul1ScaleBias_ = BuildBatchMatMul1WithScaleBias(queryIPDesc.dst_desc(), keyIPDesc.dst_desc());
+        batchMatMul1ScaleBias_ = std::make_unique<BatchMatMul1WithScaleBias>(ctx, queryIPDesc.dst_desc(), keyIPDesc.dst_desc());
 
         // Softmax construction
-        const auto qk_result_md = batchMatMul1ScaleBias_->PrimDesc().dst_desc();
+        const auto qk_result_md = batchMatMul1ScaleBias_->dst_desc();
         const int axis = qk_result_md.dims().size() - 1;
         softmax_ = std::make_unique<SoftMax>(eng, qk_result_md, axis);
 
@@ -148,7 +148,7 @@ public:
                                                BuildAttrs().Sum());
 
         // Batch MatMul2 construction
-        batchMatMul2_ = BuildBatchMatMul2(valueIPDesc.dst_desc(), attentionOutIPDesc.dst_desc());
+        batchMatMul2_ = std::make_unique<BatchMatMul2>(ctx, valueIPDesc.dst_desc(), attentionOutIPDesc.dst_desc());
 
         // Norm1
         const auto gamma1_mem = ReshapeMemory(_gamma1, {1, ctx->hiddenSize});
@@ -254,35 +254,21 @@ public:
         });
 
         // Batch MatMul1 with bias and scale
-        auto reshaped_input_mask = ReshapeMemory(input_mask, MaskDescriptor().dims());
-        auto batchMatMul1_desc = batchMatMul1ScaleBias_->PrimDesc();
-        auto batchMatMul1_QData = DataSource(ReLayoutMemory(query, batchMatMul1_desc.src_desc()));
-        auto batchMatMul1_KData = DataSource(ReLayoutMemory(key, batchMatMul1_desc.weights_desc()));
-        auto batchMatMul1_MaskData = DataSource(reshaped_input_mask);
-        auto qk_resultBuffer = ctx->PopBuffer(batchMatMul1ScaleBias_->PrimDesc().dst_desc());
-
-        std::unordered_map<int, std::reference_wrapper<DataSource>> post_ops_data = {{0, std::ref(batchMatMul1_MaskData)}};
+        auto qk_resultBuffer = ctx->PopBuffer(batchMatMul1ScaleBias_->dst_desc());
         ctx->profiler.Profile(opsToNames.at(Ops::batchMatMul1), [&](){
-            batchMatMul1ScaleBias_->ComputeWithPostOps(stm, batchMatMul1_QData, batchMatMul1_KData, post_ops_data,
-                                                qk_resultBuffer);
+            batchMatMul1ScaleBias_->Compute(stm, query, key, input_mask, qk_resultBuffer);
         });
 
         // Softmax
-        auto qk_resultData = DataSource(qk_resultBuffer);
+        auto qk_resultData = ImmutableDataSource(qk_resultBuffer);
         ctx->profiler.Profile(opsToNames.at(Ops::softmax), [&](){
             softmax_->Compute(stm, qk_resultData, qk_resultBuffer);
         });
 
         // Batch MatMul2
-        auto batchMatMul2_desc = batchMatMul2_->PrimDesc();
-        auto batchMatMul2_QKData = DataSource(qk_resultBuffer);
-        auto batchMatMul2_VData  = DataSource(ReLayoutMemory(value, batchMatMul2_desc.weights_desc()));
-        auto batchMatMul2_BData  = DataSource();
         auto resultBuffer1 = ctx->PopBuffer(attentionOutIPDesc.dst_desc());
-        auto batchMatMul2_DMem = ReLayoutMemory(resultBuffer1, batchMatMul2_desc.dst_desc());
-
         ctx->profiler.Profile(opsToNames.at(Ops::batchMatMul2), [&](){
-            batchMatMul2_->Compute(stm, batchMatMul2_QKData, batchMatMul2_VData, batchMatMul2_BData, batchMatMul2_DMem);
+            batchMatMul2_->Compute(stm, qk_resultBuffer, value, resultBuffer1);
         });
 
         // Attention Output
@@ -293,7 +279,7 @@ public:
 
         // Norm 1
         auto norm1Buffer = ReLayoutMemory(inputBufferMem, Norm1_->PrimDesc().dst_desc());
-        auto norm1BufferData = DataSource(norm1Buffer);
+        auto norm1BufferData = ImmutableDataSource(norm1Buffer);
         ctx->profiler.Profile(opsToNames.at(Ops::norm1), [&](){
             Norm1_->Compute(stm, norm1BufferData, gamma1, beta1, norm1Buffer);
         });
@@ -313,14 +299,14 @@ public:
         }
 
         // Output MatMul with Sum
-        auto output_SrcData = DataSource(intermediateBuffer);
+        auto output_SrcData = ImmutableDataSource(intermediateBuffer);
         ctx->profiler.Profile(opsToNames.at(Ops::output), [&](){
             outputIPDesc.Compute(stm, output_SrcData, inputBufferMem);
         });
 
         // Output Norm
         auto norm2Buffer = ReLayoutMemory(inputBufferMem, Norm2_->PrimDesc().dst_desc());
-        auto norm2BufferData = DataSource(norm2Buffer);
+        auto norm2BufferData = ImmutableDataSource(norm2Buffer);
         ctx->profiler.Profile(opsToNames.at(Ops::norm2), [&](){
             Norm2_->Compute(stm, norm2BufferData, gamma2, beta2, norm2Buffer);
         });
@@ -522,69 +508,109 @@ private:
             return ipConfig;
     }
 
-    std::unique_ptr<dnnl_wrappers::MatMul> BuildBatchMatMul1WithScaleBias(const dnnl::memory::desc& query_md, const dnnl::memory::desc& key_md) {
-        using namespace dnnl_wrappers;
-        using dim = dnnl::memory::dim;
-        const dim batch = ctx->batch_;
-        const dim tokenSize = ctx->maxTokenSize;
-        const dim heads = ctx->numHeads;
-        const dim hiddenSize = ctx->hiddenSize;
-        const dim headSize = hiddenSize / heads;
+    class BatchMatMul1WithScaleBias {
+    public:
+        BatchMatMul1WithScaleBias(const std::shared_ptr<BertContext>& ctx, const dnnl::memory::desc& query_md, const dnnl::memory::desc& key_md) {
+            using namespace dnnl_wrappers;
+            using dim = dnnl::memory::dim;
+            const dim batch = ctx->batch_;
+            const dim tokenSize = ctx->maxTokenSize;
+            const dim heads = ctx->numHeads;
+            const dim hiddenSize = ctx->hiddenSize;
+            const dim headSize = hiddenSize / heads;
 
-        const auto d_dt = ctx->FloatType();
+            const auto d_dt = ctx->FloatType();
 
-        // B needs to transpose
-        // dnnl::memory::format_tag::cab - is not defined
-        // const dnnl::memory::dims dnnl_strides__format_tag__adbc{heads * k * m, k, 1, heads * k};
+            // B needs to transpose
+            // dnnl::memory::format_tag::cab - is not defined
+            // const dnnl::memory::dims dnnl_strides__format_tag__adbc{heads * k * m, k, 1, heads * k};
 
-        const auto src_md =   ConvertIPDataDims(query_md, 2).reshape({batch, tokenSize, heads, headSize}).permute_axes(PERMUTE_ACBD);
-        const auto weights_md = ConvertIPDataDims(key_md, 2).reshape({batch, tokenSize, heads, headSize}).permute_axes(PERMUTE_ADBC);
-        const dnnl::memory::desc    bias_md{};
-        const dnnl::memory::desc     dst_md{{batch, heads, tokenSize, tokenSize}, d_dt, dnnl::memory::format_tag::abcd};
+            src_md =   ConvertIPDataDims(query_md, 2).reshape({batch, tokenSize, heads, headSize}).permute_axes(PERMUTE_ACBD);
+            weights_md = ConvertIPDataDims(key_md, 2).reshape({batch, tokenSize, heads, headSize}).permute_axes(PERMUTE_ADBC);
+            const dnnl::memory::desc    bias_md{};
+            dst_md = dnnl::memory::desc{{batch, heads, tokenSize, tokenSize}, d_dt, dnnl::memory::format_tag::abcd};
 
-        const dnnl::memory::desc    mask_md{{batch, 1, 1, tokenSize}, dt::f32, dnnl::memory::format_tag::abcd};
+            input_dims = {batch, 1, 1, tokenSize};
+            const dnnl::memory::desc    mask_md{input_dims, dt::f32, dnnl::memory::format_tag::abcd};
 
-        const float scale = 0.125f;
-        return std::make_unique<dnnl_wrappers::MatMul>(
-                    ctx->dnnl_context.getEngine(),
-                    src_md, weights_md, bias_md, dst_md,
-                    dnnl_wrappers::BuildAttrs()
-                        .Scale(scale)
-                        .Binary(dnnl::algorithm::binary_add, mask_md)
-                        );
-    }
-
-    std::unique_ptr<dnnl_wrappers::MatMul> BuildBatchMatMul2(const dnnl::memory::desc& value_md, const dnnl::memory::desc& attout_md) {
-        using namespace dnnl_wrappers;
-        using dim = dnnl::memory::dim;
-        const dim batch = ctx->batch_;
-        const dim tokenSize = ctx->maxTokenSize;
-        const dim heads = ctx->numHeads;
-        const dim hiddenSize = ctx->hiddenSize;
-        const dim headSize = hiddenSize / heads;
-
-        const auto s_dt = ctx->FloatType();
-
-        const auto src_md = dnnl::memory::desc{{batch, heads, tokenSize, tokenSize}, s_dt, dnnl::memory::format_tag::abcd};
-        const auto weights_md = ConvertIPDataDims(value_md, 2).reshape({batch, tokenSize, heads, headSize}).permute_axes(PERMUTE_ACBD);
-        const auto dst_md    = ConvertIPDataDims(attout_md, 2).reshape({batch, tokenSize, heads, headSize}).permute_axes(PERMUTE_ACBD);
-
-        return std::make_unique<dnnl_wrappers::MatMul>(
+            const float scale = 1.f/std::sqrt(static_cast<float>(headSize));
+            batchMatMul = std::make_unique<dnnl_wrappers::MatMul>(
                         ctx->dnnl_context.getEngine(),
-                        src_md, weights_md, dnnl::memory::desc{}, dst_md,
-                        dnnl::primitive_attr{});
-    }
+                        src_md, weights_md, bias_md, dst_md,
+                        dnnl_wrappers::BuildAttrs()
+                            .Scale(scale)
+                            .Binary(dnnl::algorithm::binary_add, mask_md)
+                            );
+        }
 
-    dnnl::memory::desc MaskDescriptor()
-    {
-        const auto prim_desc = batchMatMul1ScaleBias_->PrimDesc();
-        auto attr = prim_desc.get_primitive_attr();
-        auto post_ops = attr.get_post_ops();
-        dnnl::algorithm alg;
-        dnnl::memory::desc desc;
-        post_ops.get_params_binary(0, alg, desc);
-        return desc;
-    }
+        void Compute(dnnl::stream& stm, const dnnl::memory& query, const dnnl::memory& key, const dnnl::memory& input_mask, dnnl::memory& dst) {
+            using namespace dnnl_wrappers;
+
+            auto QData = ImmutableDataSource(ReLayoutMemory(query, src_md));
+            auto KData = ImmutableDataSource(ReLayoutMemory(key, weights_md));
+            auto MaskData = ImmutableDataSource(ReshapeMemory(input_mask, input_dims));
+            std::unordered_map<int, std::reference_wrapper<DataSource>> post_ops_data = {{0, std::ref(MaskData)}};
+
+            batchMatMul->ComputeWithPostOps(stm, QData, KData, post_ops_data, dst);
+        }
+
+        const dnnl::memory::desc& dst_desc() const {
+            return dst_md;
+        }
+
+    private:
+        dnnl::memory::desc src_md;
+        dnnl::memory::desc weights_md;
+        dnnl::memory::desc dst_md;
+        dnnl::memory::dims input_dims;
+        std::unique_ptr<dnnl_wrappers::MatMul> batchMatMul;
+    };
+
+    class BatchMatMul2 {
+    public:
+        BatchMatMul2(const std::shared_ptr<BertContext>& ctx, const dnnl::memory::desc& value_md, const dnnl::memory::desc& attout_md) {
+            using namespace dnnl_wrappers;
+            using dim = dnnl::memory::dim;
+            const dim batch = ctx->batch_;
+            const dim tokenSize = ctx->maxTokenSize;
+            const dim heads = ctx->numHeads;
+            const dim hiddenSize = ctx->hiddenSize;
+            const dim headSize = hiddenSize / heads;
+
+            const auto s_dt = ctx->FloatType();
+
+            src_md = dnnl::memory::desc{{batch, heads, tokenSize, tokenSize}, s_dt, dnnl::memory::format_tag::abcd};
+            weights_md = ConvertIPDataDims(value_md, 2).reshape({batch, tokenSize, heads, headSize}).permute_axes(PERMUTE_ACBD);
+            dst_md    = ConvertIPDataDims(attout_md, 2).reshape({batch, tokenSize, heads, headSize}).permute_axes(PERMUTE_ACBD);
+
+            batchMatMul = std::make_unique<dnnl_wrappers::MatMul>(
+                            ctx->dnnl_context.getEngine(),
+                            src_md, weights_md, dnnl::memory::desc{}, dst_md,
+                            dnnl::primitive_attr{});
+        }
+
+        void Compute(dnnl::stream& stm, const dnnl::memory& qk_result, const dnnl::memory& value, dnnl::memory& dst) {
+            using namespace dnnl_wrappers;
+
+            auto QKData = ImmutableDataSource(qk_result);
+            auto VData  = ImmutableDataSource(ReLayoutMemory(value, weights_md));
+            auto BData  = ImmutableDataSource();
+            auto DMem = ReLayoutMemory(dst, dst_md);
+
+            batchMatMul->Compute(stm, QKData, VData, BData, DMem);
+        }
+
+        const dnnl::memory::desc& dst_desc() const {
+            return dst_md;
+        }
+
+    private:
+        dnnl::memory::desc src_md;
+        dnnl::memory::desc weights_md;
+        dnnl::memory::desc dst_md;
+        std::unique_ptr<dnnl_wrappers::MatMul> batchMatMul;
+    };
+
 private:
     std::shared_ptr<BertContext> ctx;
 
@@ -593,11 +619,11 @@ private:
     InnerProductInferenceDesc keyIPDesc;
     InnerProductInferenceDesc valueIPDesc;
 
-    std::unique_ptr<dnnl_wrappers::MatMul> batchMatMul1ScaleBias_;
+    std::unique_ptr<BatchMatMul1WithScaleBias> batchMatMul1ScaleBias_;
 
     std::unique_ptr<dnnl_wrappers::SoftMax> softmax_;
 
-    std::unique_ptr<dnnl_wrappers::MatMul> batchMatMul2_;
+    std::unique_ptr<BatchMatMul2> batchMatMul2_;
 
     InnerProductInferenceDesc attentionOutIPDesc;
 

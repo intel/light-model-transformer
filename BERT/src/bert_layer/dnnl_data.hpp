@@ -40,7 +40,7 @@ public:
         return result;
     }
 
-private:
+protected:
     dnnl::memory mem_;
     BuildAttrs attr_;
 };
@@ -58,6 +58,24 @@ public:
 
 private:
     dnnl::memory cached_mem_;
+};
+
+/// @brief  Optimized DataSource which does not modify original memory
+class ImmutableDataSource : public DataSource {
+public:
+    ImmutableDataSource(const dnnl::memory& mem = {}) : DataSource(mem, {}) {}
+    dnnl::memory GetData(dnnl::stream& stm, const dnnl::memory::desc& md) override {
+        // unused in Release build:
+        (void)(stm);
+        (void)(md);
+
+        if (!mem_) {
+             return mem_;
+        }
+
+        assert(attr_.Empty() && mem_.get_engine() == stm.get_engine() && mem_.get_desc() == md);
+        return mem_;
+    }
 };
 
 inline dnnl::memory::format_tag PlainFormatTag(size_t ndims, bool trans = false) {

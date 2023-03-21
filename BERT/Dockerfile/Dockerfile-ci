@@ -37,6 +37,7 @@ RUN apt-get install -y \
         bash-completion \
         curl \
         ninja-build \
+        libjemalloc2 \
         --no-install-recommends
 
 # Install oneAPI components

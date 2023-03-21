@@ -149,11 +149,13 @@ def testStages(List env) {
                         for(BATCH_SIZE in [1, 32]) {
                             sh """#!/bin/bash
                                 source /opt/intel/oneapi/setvars.sh intel64
+                                export LD_PRELOAD=libjemalloc.so.2
                                 ${NUMA} ./tests/benchmark/benchmark ${a} ${BATCH_SIZE} ${QUANTIZATION} ${BFLOAT16} | tee benchmark.log
                             """
                             sh "grep 'Average Throughput' benchmark.log | sed 's/.*Throughput: \\(.*\\)/${CXX_COMPILER}\\tbenchmark.exe ${a}\\t${TF_VERSION}\\tBERT-base\\t${QUANTIZATION}\\t${BFLOAT16}\\t${BATCH_SIZE}\\t\\1/' >> benchmark.csv"
                             sh """#!/bin/bash
                                 source /opt/intel/oneapi/setvars.sh intel64
+                                export LD_PRELOAD=libjemalloc.so.2
                                 ${NUMA} ./tests/benchmark/benchmark ${a} ${BATCH_SIZE} ${QUANTIZATION} ${BFLOAT16} --large | tee benchmark.log
                             """
                             sh "grep 'Average Throughput' benchmark.log | sed 's/.*Throughput: \\(.*\\)/${CXX_COMPILER}\\tbenchmark.exe ${a}\\t${TF_VERSION}\\tBERT-large\\t${QUANTIZATION}\\t${BFLOAT16}\\t${BATCH_SIZE}\\t\\1/' >> benchmark.csv"
@@ -217,6 +219,7 @@ def testStages(List env) {
                                 path_to_bertop=${WORKSPACE}/build/src/tf_op/libBertOp.so
                                 source /opt/intel/oneapi/setvars.sh intel64
                                 FROZEN_DIR=${ORIGINAL_MODEL_DIRS[MODEL]}
+                                export LD_PRELOAD=libjemalloc.so.2
 
                                 # running only once when both QUANTIZATION and BFLOAT16 are disabled
                                 if [[ "${QUANTIZATION}" =~ "--no" && "${BFLOAT16}" =~ "--no" ]] ; then
