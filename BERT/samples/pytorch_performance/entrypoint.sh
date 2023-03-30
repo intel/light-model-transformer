@@ -5,7 +5,7 @@
 
 set -e
 
-cd /libraries.ai.performance.models.bert/src/pytorch_op/python
+cd /libraries.ai.performance.models.bert/tests/pytorch
 
 
 before=()

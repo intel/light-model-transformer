@@ -1,4 +1,9 @@
 #!/usr/bin/env python
+
+# Copyright (C) 2021-2022 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+
+
 import torch
 
 import numpy as np

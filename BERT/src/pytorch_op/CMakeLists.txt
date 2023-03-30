@@ -27,10 +27,6 @@ include_directories(
 
 add_library(${TARGET} SHARED ${SOURCES})
 
-target_include_directories(${TARGET}
-    PUBLIC include
-)
-
 set_target_properties(${TARGET} PROPERTIES
     CXX_STANDARD_REQUIRED TRUE
     CXX_STANDARD 14)

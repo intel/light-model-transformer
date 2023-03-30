@@ -1,4 +1,8 @@
-#include "pytorch_op/bert_op.hpp"
+// Copyright (C) 2022 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+//
+
+#include "bert_op.hpp"
 
 #include "bert_layer_quant_int8.h"
 #include "bert_context.h"

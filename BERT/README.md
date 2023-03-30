@@ -36,7 +36,7 @@ BERT model optimization supports systems meeting the following requirements:
     mkdir build
     cd build
     source /opt/intel/oneapi/setvars.sh # Make sure CMake can find oneDNN
-    cmake ..
+    cmake .. -DBACKENDS="TF\;PT" # Use TF (Tensorflow), PT (PyTorch) or both, based on which framerowks you wish to use.
     cmake --build . -j 8
     ```
 
@@ -49,6 +49,7 @@ All of them require built from source the BERT Operator (BertOp), refer to [Buil
 
 * [tensorflow 1.x](tests/tf1_ops_accuracy/README.md)
 * [tensorflow 2.x](tests/tf2_ops_accuracy/README.md) (*Up to TF v.2.9 is supported now*)
+* [pytorch](tests/pytorch/README.md) (only huggingface models are currently supported)
 * [Model Zoo for Intel® Architecture](tests/model_zoo/README.md)
 
 ## License

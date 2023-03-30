@@ -1,11 +1,13 @@
+# Copyright (C) 2023 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+#
+
 import torch
 
 import transformers
 from transformers.modeling_outputs import BaseModelOutputWithPastAndCrossAttentions
 
 from typing import Union, Tuple, Optional
-
-from os import getenv
 
 
 class BertEncoderOp(transformers.models.bert.modeling_bert.BertEncoder):
@@ -121,18 +123,3 @@ class BertEncoderOp(transformers.models.bert.modeling_bert.BertEncoder):
 
     def get_quantization_factors(self):
         return self.bert_op.get_quantization_factors()
-
-
-# This will be moved to somewhere like the __init__.py of the package.
-transformers.models.bert.modeling_bert.BertEncoder = BertEncoderOp
-
-
-class EnvVariableNotSetError(Exception):
-    pass
-
-
-library_path = getenv('BERT_OP_LIB')
-if library_path is None:
-    raise EnvVariableNotSetError(
-        "Variable 'BERT_OP_LIB' must be set and point to the BertOp pytorch .so")
-torch.classes.load_library(library_path)

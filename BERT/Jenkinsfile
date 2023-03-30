@@ -324,10 +324,11 @@ def pytorchStages() {
             dir('build') {
                 sh """#!/bin/bash
                     set -e
-                    export BERT_OP_LIB=${WORKSPACE}/build/src/pytorch_op/libBertOpPT.so
+                    export PYTHONPATH=\${PYTHONPATH}:${WORKSPACE}/python
+                    export BERT_OP_PT_LIB=${WORKSPACE}/build/src/pytorch_op/libBertOpPT.so
                     export HUGGINGFACE_HUB_CACHE=/data/huggingface_hub_cache
                     source /opt/intel/oneapi/setvars.sh intel64
-                    ${WORKSPACE}/src/pytorch_op/python/accuracy.py --output-csv accuracy_pytorch.csv -n 500
+                    ${WORKSPACE}/tests/pytorch/accuracy.py --output-csv accuracy_pytorch.csv -n 500
                 """
                 stash includes: 'accuracy_pytorch.csv', name: 'accuracy_pytorch'
 

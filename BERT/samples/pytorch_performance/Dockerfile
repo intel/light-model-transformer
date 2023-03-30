@@ -89,7 +89,8 @@ RUN . /opt/intel/oneapi/setvars.sh && \
 RUN . /opt/intel/oneapi/setvars.sh && \
     cmake --build . -j
 
-ENV BERT_OP_LIB=/libraries.ai.performance.models.bert/build/src/pytorch_op/libBertOpPT.so
+ENV BERT_OP_PT_LIB=/libraries.ai.performance.models.bert/build/src/pytorch_op/libBertOpPT.so
+ENV PYTHONPATH=/libraries.ai.performance.models.bert/python
 
 WORKDIR /
 COPY $DEMO_DIR/entrypoint.sh entrypoint.sh

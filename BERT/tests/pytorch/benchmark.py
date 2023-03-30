@@ -1,5 +1,9 @@
 #!/usr/bin/env python
 
+# Copyright (C) 2021-2022 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+
+
 from unittest.mock import NonCallableMagicMock
 import torch
 import numpy as np
