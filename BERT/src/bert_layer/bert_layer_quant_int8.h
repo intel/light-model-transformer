@@ -25,6 +25,7 @@
 #include <tuple>
 #include <type_traits>
 #include <vector>
+#include <unordered_map>
 
 
 class BertLayer
@@ -120,16 +121,15 @@ public:
 
         auto& eng = ctx->dnnl_context.getEngine();
 
-        // query, key and value sizes are same
-        auto m = ctx->maxTokenSize; // A.Rows();
-        auto n = ctx->hiddenSize; // B.Cols();
-        auto k = ctx->hiddenSize; // A.Cols() == B.Rows();
-        queryIPDesc = BuildInnerProduct(op_data_types, m, n, k, quant_factors_.qkv, _queryWeight, _queryBias);
-        keyIPDesc   = BuildInnerProduct(op_data_types, m, n, k, quant_factors_.qkv,   _keyWeight,   _keyBias);
-        valueIPDesc = BuildInnerProduct(op_data_types, m, n, k, quant_factors_.qkv, _valueWeight, _valueBias);
+        queryKeyValue_ = std::make_unique<QueryKeyValue>(ctx,
+                                      op_data_types,
+                                     _queryWeight, _queryBias,
+                                     _keyWeight, _keyBias,
+                                     _valueWeight, _valueBias,
+                                     quant_factors_.qkv);
 
         // Batch MatMul1 with bias and scale construction
-        batchMatMul1ScaleBias_ = std::make_unique<BatchMatMul1WithScaleBias>(ctx, queryIPDesc.dst_desc(), keyIPDesc.dst_desc());
+        batchMatMul1ScaleBias_ = std::make_unique<BatchMatMul1WithScaleBias>(ctx, queryKeyValue_->getQueryMD(), queryKeyValue_->getKeyMD());
 
         // Softmax construction
         const auto qk_result_md = batchMatMul1ScaleBias_->dst_desc();
@@ -138,17 +138,17 @@ public:
 
         // At first, construct att out to use src_desc in batchMatMul2
         // Attention Output MatMul construction
-        m = ctx->maxTokenSize; // A.Rows();
-        n = ctx->hiddenSize; // B.Cols();
-        k = ctx->hiddenSize; // A.Cols() == B.Rows();
-        attentionOutIPDesc = BuildInnerProduct(op_data_types,
+        auto m = ctx->maxTokenSize; // A.Rows();
+        auto n = ctx->hiddenSize; // B.Cols();
+        auto k = ctx->hiddenSize; // A.Cols() == B.Rows();
+        attentionOutIPDesc = BuildInnerProduct(ctx, op_data_types,
                                                m, n, k,
                                                quant_factors_.attention_out,
                                                _attentionOutputWeight, _attentionOutputBias,
                                                BuildAttrs().Sum());
 
         // Batch MatMul2 construction
-        batchMatMul2_ = std::make_unique<BatchMatMul2>(ctx, valueIPDesc.dst_desc(), attentionOutIPDesc.dst_desc());
+        batchMatMul2_ = std::make_unique<BatchMatMul2>(ctx, queryKeyValue_->getValueMD(), attentionOutIPDesc.dst_desc());
 
         // Norm1
         const auto gamma1_mem = ReshapeMemory(_gamma1, {1, ctx->hiddenSize});
@@ -178,7 +178,7 @@ public:
         m = ctx->maxTokenSize; // A.Rows();
         n = ctx->hiddenSize; // B.Cols();
         k = ctx->intermediateSize; // A.Cols() == B.Rows();
-        outputIPDesc = BuildInnerProduct({intermediateBufType, outputWeightType, outputBiasType, dst_type},
+        outputIPDesc = BuildInnerProduct(ctx, {intermediateBufType, outputWeightType, outputBiasType, dst_type},
                                          m, n, k,
                                          _quant_factors.output,
                                          _outputWeight,
@@ -199,7 +199,7 @@ public:
         m = ctx->maxTokenSize; // A.Rows();
         n = ctx->intermediateSize; // B.Cols();
         k = ctx->hiddenSize; // A.Cols() == B.Rows();
-        intermediateIPDesc = BuildInnerProduct({src_type, weight_type, bias_type, intermediateBufType},
+        intermediateIPDesc = BuildInnerProduct(ctx, {src_type, weight_type, bias_type, intermediateBufType},
                                                 m, n, k,
                                                 _quant_factors.intermediate,
                                                 _intermediateWeight, _intermediateBias,
@@ -233,30 +233,15 @@ public:
             quant_factors_.qkv.Update(inputBufferMem);
         }
 
-        auto qkv_SrcData = queryIPDesc.ScaledCachedData(inputBufferMem);
-
-        // Query
-        auto query = ctx->PopBuffer(queryIPDesc.dst_desc());
-        ctx->profiler.Profile(opsToNames.at(Ops::query), [&](){
-                queryIPDesc.Compute(stm, qkv_SrcData, query);
-        });
-
-        // Key
-        auto key = ctx->PopBuffer(keyIPDesc.dst_desc());
-        ctx->profiler.Profile(opsToNames.at(Ops::key), [&](){
-            keyIPDesc.Compute(stm, qkv_SrcData, key);
-        });
-
-        // Value
-        auto value = ctx->PopBuffer(valueIPDesc.dst_desc());
-        ctx->profiler.Profile(opsToNames.at(Ops::value), [&](){
-            valueIPDesc.Compute(stm, qkv_SrcData, value);
-        });
+        // Query+key+Value
+        auto qkv_resultBuffer = ctx->PopBuffer(queryKeyValue_->getResultMD());
+        dnnl::memory query_mem, key_mem, value_mem;
+        std::tie(query_mem, key_mem, value_mem) = queryKeyValue_->Compute(inputBufferMem, qkv_resultBuffer);
 
         // Batch MatMul1 with bias and scale
         auto qk_resultBuffer = ctx->PopBuffer(batchMatMul1ScaleBias_->dst_desc());
         ctx->profiler.Profile(opsToNames.at(Ops::batchMatMul1), [&](){
-            batchMatMul1ScaleBias_->Compute(stm, query, key, input_mask, qk_resultBuffer);
+            batchMatMul1ScaleBias_->Compute(stm, query_mem, key_mem, input_mask, qk_resultBuffer);
         });
 
         // Softmax
@@ -268,7 +253,7 @@ public:
         // Batch MatMul2
         auto resultBuffer1 = ctx->PopBuffer(attentionOutIPDesc.dst_desc());
         ctx->profiler.Profile(opsToNames.at(Ops::batchMatMul2), [&](){
-            batchMatMul2_->Compute(stm, qk_resultBuffer, value, resultBuffer1);
+            batchMatMul2_->Compute(stm, qk_resultBuffer, value_mem, resultBuffer1);
         });
 
         // Attention Output
@@ -384,7 +369,11 @@ private:
     // Shift bias for source zero-point case with formula:
     // let: weight[N, K], bias[N]
     // bias[n] -= reduce_sum(weight, K)[n] * zero_point
-    dnnl::memory shiftBias(const dnnl::memory::dims& weight_dims, dnnl_wrappers::DataSource& weight, dnnl_wrappers::DataSource& bias, float zero_point) {
+    static dnnl::memory shiftBias(const std::shared_ptr<BertContext>& ctx,
+                                  const dnnl::memory::dims& weight_dims,
+                                  dnnl_wrappers::DataSource& weight,
+                                  dnnl_wrappers::DataSource& bias,
+                                  float zero_point) {
         using namespace dnnl_wrappers;
         using reduce = dnnl::reduction;
         using algo = dnnl::algorithm;
@@ -458,7 +447,8 @@ private:
         mutable dnnl::memory::desc dst_desc_{};
     };
 
-    InnerProductInferenceDesc BuildInnerProduct(const OpDataTypes& data_types,
+    static InnerProductInferenceDesc BuildInnerProduct(const std::shared_ptr<BertContext>& ctx,
+                                                const OpDataTypes& data_types,
                                                 int m, int n, int k,
                                                 const MinMax& min_max,
                                                 const dnnl::memory& weight,
@@ -497,7 +487,7 @@ private:
 
             ipConfig.weight = ScaledCachedData(weight_mem, weight_scale);
             auto scaled_bias = ScaledData(bias_mem, bias_scale);
-            ipConfig.bias = CachedDataSource(shiftBias(dims.weights_tz, ipConfig.weight, scaled_bias, ipConfig.shift));
+            ipConfig.bias = CachedDataSource(shiftBias(ctx, dims.weights_tz, ipConfig.weight, scaled_bias, ipConfig.shift));
 
             ipConfig.prim   = std::make_unique<InnerProduct<InnerProductPrimT>>(MakeInnerProduct<InnerProductPrimT>(
                                        eng, ctx->batch_, m, n, k, data_types.src_dt, data_types.weight_dt,
@@ -507,6 +497,186 @@ private:
 
             return ipConfig;
     }
+
+    class QueryKeyValue {
+    public:
+        QueryKeyValue(const std::shared_ptr<BertContext>& _ctx,
+                      const OpDataTypes& op_data_types,
+                      const dnnl::memory& _queryWeight, const dnnl::memory& _queryBias,
+                      const dnnl::memory& _keyWeight, const dnnl::memory& _keyBias,
+                      const dnnl::memory& _valueWeight, const dnnl::memory& _valueBias, const MinMax& qkv_min_max)
+            : ctx{_ctx} {
+
+            using namespace dnnl_wrappers;
+            auto& eng = ctx->dnnl_context.getEngine();
+
+            // query, key and value sizes are same
+            auto m = ctx->maxTokenSize; // A.Rows();
+            auto n = ctx->hiddenSize; // B.Cols();
+            auto k = ctx->hiddenSize; // A.Cols() == B.Rows();
+
+            // weights: io {k,n}
+            // bias: {n}
+
+            if (joinQKV()) {
+
+                qkvWeight = joinData({k, n}, {_queryWeight, _keyWeight, _valueWeight});
+                assert(qkvWeight.get_desc().dims() == (dnnl::memory::dims{k, n*3}));
+
+                qkvBias = joinData({n}, {_queryBias, _keyBias, _valueBias});
+                assert(qkvBias.get_desc().dims() == (dnnl::memory::dims{n*3}));
+
+                qkvIPDesc = BertLayer::BuildInnerProduct(ctx, op_data_types, m, n*3, k, qkv_min_max, qkvWeight, qkvBias);
+
+                const auto qkv_dst_md = ConvertIPDataDims(qkvIPDesc.dst_desc(), 2);
+                auto qkv_dims = qkv_dst_md.dims();
+                assert(qkv_dims == (dnnl::memory::dims{ctx->batch_ * m, n*3}));
+
+                auto qkv_reshape_md = qkv_dst_md.reshape({qkv_dims[0]/m, qkv_dims[0]/ctx->batch_, 3, qkv_dims[1]/3}).permute_axes({1,2,0,3});
+                qkvResultMD = {qkv_reshape_md.dims(), qkv_reshape_md.data_type(), dnnl::memory::dims{}};
+                qkvReorder = {dnnl::reorder::primitive_desc{eng, qkv_reshape_md, eng, qkvResultMD}};
+
+                qkv_dims = qkvResultMD.dims();
+                qkv_dims[0] = 1;
+                auto qkv_part_md = dnnl::memory::desc{qkv_dims, qkvResultMD.data_type(), dnnl::memory::dims{}}.reshape({qkv_dims[1] * qkv_dims[2], qkv_dims[3]});
+
+                queryMD = keyMD = valueMD = qkv_part_md;
+
+            } else /*!joinQKV*/ {
+
+                queryIPDesc = BertLayer::BuildInnerProduct(ctx, op_data_types, m, n, k, qkv_min_max, _queryWeight, _queryBias);
+                  keyIPDesc = BertLayer::BuildInnerProduct(ctx, op_data_types, m, n, k, qkv_min_max,   _keyWeight,   _keyBias);
+                valueIPDesc = BertLayer::BuildInnerProduct(ctx, op_data_types, m, n, k, qkv_min_max, _valueWeight, _valueBias);
+
+                queryMD = queryIPDesc.dst_desc();
+                  keyMD =   keyIPDesc.dst_desc();
+                valueMD = valueIPDesc.dst_desc();
+
+                qkvResultMD = dnnl::memory::desc{
+                    dnnl::memory::dims{static_cast<dnnl::memory::dim>(
+                        queryMD.get_size() + keyMD.get_size() + valueMD.get_size()
+                    )},
+                    dnnl::memory::data_type::u8,
+                    dnnl::memory::dims{}
+                };
+            }
+
+            offsetQuery = 0;
+            offsetKey   = offsetQuery + queryMD.get_size();
+            offsetValue = offsetKey   +   keyMD.get_size();
+        }
+
+        std::tuple<dnnl::memory, dnnl::memory, dnnl::memory>
+        Compute(dnnl::memory& inputBufferMem, const BertContext::BufferHandler& qkvResultBuffer) {
+            assert(qkvResultBuffer.get().get_desc() == qkvResultMD);
+
+            auto& eng = ctx->dnnl_context.getEngine();
+            auto& stm = ctx->dnnl_context.getEngineStream();
+
+            static auto& opsToNames = BertLayer::OpsToNames();
+
+            auto getSubmem = [&](const dnnl::memory::desc& md, const dnnl::memory& buffer, size_t offset) -> dnnl::memory {
+                return {
+                    md,
+                    eng,
+                    static_cast<char*>(buffer.get_data_handle()) + offset
+                };
+            };
+
+            auto query = getSubmem(queryMD, qkvResultBuffer, offsetQuery);
+            auto   key = getSubmem(  keyMD, qkvResultBuffer, offsetKey);
+            auto value = getSubmem(valueMD, qkvResultBuffer, offsetValue);
+
+            if (joinQKV()) {
+                auto qkv_SrcData = qkvIPDesc.ScaledData(inputBufferMem);
+                // Query+key+Value
+                auto qkv = ctx->PopBuffer(qkvIPDesc.dst_desc());
+                ctx->profiler.Profile(opsToNames.at(Ops::query), [&](){
+                    qkvIPDesc.Compute(stm, qkv_SrcData, qkv);
+                });
+
+                ctx->profiler.Profile(opsToNames.at(Ops::key), [&](){
+                    qkvReorder.execute(stm, {
+                        {DNNL_ARG_SRC, qkv},
+                        {DNNL_ARG_DST, qkvResultBuffer}
+                    });
+                    stm.wait();
+                });
+            } else /*!joinQKV*/ {
+                auto qkv_SrcData = queryIPDesc.ScaledCachedData(inputBufferMem);
+                // Query
+                ctx->profiler.Profile(opsToNames.at(Ops::query), [&](){
+                    queryIPDesc.Compute(stm, qkv_SrcData, query);
+                });
+
+                // Key
+                ctx->profiler.Profile(opsToNames.at(Ops::key), [&](){
+                    keyIPDesc.Compute(stm, qkv_SrcData, key);
+                });
+
+                // Value
+                ctx->profiler.Profile(opsToNames.at(Ops::value), [&](){
+                    valueIPDesc.Compute(stm, qkv_SrcData, value);
+                });
+            }
+
+            return { query, key, value };
+        }
+
+        dnnl::memory::desc getResultMD() const { return qkvResultMD; }
+        dnnl::memory::desc  getQueryMD() const { return queryMD; }
+        dnnl::memory::desc    getKeyMD() const { return keyMD; }
+        dnnl::memory::desc  getValueMD() const { return valueMD; }
+    private:
+        bool joinQKV() const {
+           return ctx->batch_ <= 1 && !ctx->use_quantization;
+        }
+
+        dnnl::memory joinData(const dnnl::memory::dims& dims, const std::vector<dnnl::memory>& srcs) {
+            if (srcs.size() == 0) {
+                return {};
+            }
+
+            auto& eng = ctx->dnnl_context.getEngine();
+            auto& stm = ctx->dnnl_context.getEngineStream();
+
+            const dnnl::memory::desc md{dims, srcs.at(0).get_desc().data_type(), dnnl::memory::dims{}};
+            std::vector<dnnl::memory::desc> descs(srcs.size(), md);
+
+            dnnl::concat::primitive_desc concat_pd{static_cast<int>(dims.size()-1), descs, eng};
+            dnnl::memory result{concat_pd.dst_desc(), eng};
+
+            std::unordered_map<int, dnnl::memory> args{{DNNL_ARG_DST, result}};
+            for (int i = 0; i < static_cast<int>(srcs.size()); ++i) {
+                args.emplace(DNNL_ARG_MULTIPLE_SRC + i, dnnl_wrappers::ReLayoutMemory(srcs[i], md));
+            }
+
+            dnnl::concat{concat_pd}.execute(stm, args);
+            stm.wait();
+
+            return result;
+        }
+
+        std::shared_ptr<BertContext> ctx;
+        // Joined query, key, value weight, bias and MatMul op
+        BertLayer::InnerProductInferenceDesc qkvIPDesc;
+        dnnl::memory qkvWeight;
+        dnnl::memory qkvBias;
+        dnnl::reorder qkvReorder;
+
+        // Separate query, key and value
+        BertLayer::InnerProductInferenceDesc queryIPDesc;
+        BertLayer::InnerProductInferenceDesc keyIPDesc;
+        BertLayer::InnerProductInferenceDesc valueIPDesc;
+
+        dnnl::memory::desc qkvResultMD;
+        dnnl::memory::desc queryMD;
+        dnnl::memory::desc keyMD;
+        dnnl::memory::desc valueMD;
+        size_t offsetQuery;
+        size_t offsetKey;
+        size_t offsetValue;
+    };
 
     class BatchMatMul1WithScaleBias {
     public:
@@ -614,10 +784,7 @@ private:
 private:
     std::shared_ptr<BertContext> ctx;
 
-    // Separate query, key, value weight, bias and MatMul op
-    InnerProductInferenceDesc queryIPDesc;
-    InnerProductInferenceDesc keyIPDesc;
-    InnerProductInferenceDesc valueIPDesc;
+    std::unique_ptr<QueryKeyValue> queryKeyValue_;
 
     std::unique_ptr<BatchMatMul1WithScaleBias> batchMatMul1ScaleBias_;
 

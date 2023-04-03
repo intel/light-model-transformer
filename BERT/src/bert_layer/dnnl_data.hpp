@@ -131,7 +131,7 @@ dnnl::memory ReshapeMemory(const dnnl::memory& memory, const dnnl::memory::dims&
  */
 dnnl::memory ReLayoutMemory(const dnnl::memory& mem, dnnl::memory::desc layout) {
     layout.data.data_type = mem.get_desc().data.data_type;
-    assert(layout.get_size() == mem.get_desc().get_size());
+    assert(layout.get_size() <= mem.get_desc().get_size());
     return dnnl::memory{layout, mem.get_engine(), mem.get_data_handle()};
 }
 
