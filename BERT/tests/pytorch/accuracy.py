@@ -64,14 +64,14 @@ def main(args: argparse.Namespace):
     print('Running unoptimized model')
     config = transformers.BertConfig.from_pretrained(args.model)
     correct, num_samples, accuracy = run_model(args.model, config, inputs, labels, results)
-    results = results.append({
+    row = pd.Series({
         'Model': args.model,
         'Quantization': '-',
         'BFloat16': '-',
         'Correct/Total': f'{correct}/{num_samples}',
         'Accuracy': f'{accuracy}'
-        },
-        ignore_index=True)
+        })
+    results = pd.concat([results, row.to_frame().T], ignore_index=True)
 
     # Optimized model runs:
     import bert_op
@@ -90,14 +90,14 @@ def main(args: argparse.Namespace):
         config.use_bfloat16 = bf16
         config.quantization_factors = QUANT_FACTORS
         correct, num_samples, accuracy = run_model(args.model, config, inputs, labels, results)
-        results = results.append({
+        row = pd.Series({
             'Model': '(OPT) ' + args.model,
             'Quantization': 'On' if quant else 'Off',
             'BFloat16': 'On' if bf16 else 'Off',
             'Correct/Total': f'{correct}/{num_samples}',
             'Accuracy': f'{accuracy}'
-            },
-            ignore_index=True)
+            })
+        results = pd.concat([results, row.to_frame().T], ignore_index=True)
 
     print(results)
 
