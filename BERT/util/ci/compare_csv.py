@@ -28,72 +28,83 @@ def compare(fname, cfolder, header, results):
     data_pr = pd.read_csv(fname, sep='\t').dropna().drop_duplicates()
     try:
         data_n  = pd.read_csv(cfolder + os.sep + fname, sep='\t').dropna().drop_duplicates()
+
+        # If we add a new column to the table, we need to reindex the nightly DataFrame so that it has the same header.
+        # The default np.NaN content of the new column may not make sense for the pd.merge call, so we can add an entry to 
+        # the `default_values` dictionary for that particular column and fill the missing values. 
+        data_n = data_n.reindex(columns=data_pr.columns).fillna(default_values)
+
+        try:
+            # Use 'outer' to include new rows, which were not previously run in nightly
+            output = pd.merge(data_n, data_pr,
+                            on=header,
+                            how='outer',
+                            suffixes=[Nightly_suffix, PR_suffix])
+
+            # Drop NaNs except those in the nightly columns (these are expected due to 'outer' above).
+            # This resutls in new rows being shown, and leaves 'nan%' in columns that show comparison against nightly.
+            output.dropna(inplace=True, subset=[col for col in data_n.columns if Nightly_suffix not in col])
+
+            # st = output.style
+
+            no_ms = lambda x: str(x).rstrip(' samples/s')
+
+            for header in results:
+                pr = output[header + PR_suffix].map(no_ms).astype(float)
+                ni = output[header + Nightly_suffix].map(no_ms).astype(float)
+                output[header + Diff_suffix] = (pr / ni * 100).apply(lambda x: "{0:.2f}%".format(x))
+                # st.background_gradient(cmap=rgmap, vmin=0.5, vmax=1.5,
+                #                        subset=header + ' Diff')
+
+            # remove no longer needed columns with nightly results
+            output.drop(output.filter(regex=Nightly_suffix).columns, axis=1, inplace=True)
+
+
+        except KeyError:
+            print("Something went wrong with merging, saving without comparison data")
+            output = data_pr
+
     # If there's not nightly run to compare to, just save the .html
     except FileNotFoundError:
         print(f'No nightly data found for {fname}, saving without comparison.')
-        res = BeautifulSoup(data_pr.to_html(index=False), features='html.parser')
-        for th in res.table.thead.tr.select('th'):
-            th.name = 'td'
-        with open(os.path.splitext(fname)[0] + '.html','w') as f:
-            f.write(str(res))
-        return
+        output = data_pr
 
-    # If we add a new column to the table, we need to reindex the nightly DataFrame so that it has the same header.
-    # The default np.NaN content of the new column may not make sense for the pd.merge call, so we can add an entry to 
-    # the `default_values` dictionary for that particular column and fill the missing values. 
-    data_n = data_n.reindex(columns=data_pr.columns).fillna(default_values)
+    # Single-character cells do not seem to be rendered properly on the Jenkins webpage,
+    # so we work around this by adding quotes around the character. At the time of writing,
+    # this is only a problem for the 'Batch Size' column for single-digit batch sizes.
+    def _add_quotation_marks(content):
+        text = str(content)
+        return f'\'{text}\''
 
-    try:
-        # Use 'outer' to include new rows, which were not previously run in nightly
-        output = pd.merge(data_n, data_pr,
-                        on=header,
-                        how='outer',
-                        suffixes=[Nightly_suffix, PR_suffix])
+    output_html = output.to_html(index=False, formatters={
+        'Batch Size': _add_quotation_marks
+        })
+    res = BeautifulSoup(output_html, features='html.parser')
 
-        # Drop NaNs except those in the nightly columns (these are expected due to 'outer' above).
-        # This resutls in new rows being shown, and leaves 'nan%' in columns that show comparison against nightly.
-        output.dropna(inplace=True, subset=[col for col in data_n.columns if Nightly_suffix not in col])
-
-        # st = output.style
-
-        no_ms = lambda x: str(x).rstrip(' samples/s')
-
-        for header in results:
-            pr = output[header + PR_suffix].map(no_ms).astype(float)
-            ni = output[header + Nightly_suffix].map(no_ms).astype(float)
-            output[header + Diff_suffix] = (pr / ni * 100).apply(lambda x: "{0:.2f}%".format(x))
-            # st.background_gradient(cmap=rgmap, vmin=0.5, vmax=1.5,
-            #                        subset=header + ' Diff')
-
-        # remove no longer needed columns with nightly results
-        output.drop(output.filter(regex=Nightly_suffix).columns, axis=1, inplace=True)
-
-        # columns to mark
-        cols = []
-        for header in results:
+    # columns to mark
+    cols = []
+    for header in results:
+        try:
             cols.append(output.columns.get_loc(header + Diff_suffix))
+        except KeyError:
+            # This is OK if there is no nightly to compare to.
+            pass
 
-        res = BeautifulSoup(output.to_html(index=False), features='html.parser')
+    # set color of added columns according to it's values
+    for tr in res.table.tbody.select('tr'):
+        for i in cols:
+            td = tr.select('td')[i]
+            try:
+                as_float = float(td.text.strip('%'))
+                value = as_float / 100.0
+            except ValueError:
+                value = float('nan')
 
-        # set color of added columns according to it's values
-        for tr in res.table.tbody.select('tr'):
-            for i in cols:
-                td = tr.select('td')[i]
-                try:
-                    as_float = float(td.text.strip('%'))
-                    value = as_float / 100.0
-                except ValueError:
-                    value = float('nan')
-
-                if not isnan(value):
-                    field_color = color(value, rgmap, 0.5, 1.5)
-                else:
-                    field_color = matplotlib.colors.rgb2hex((.5, .5, .5))
-                td.attrs['bgcolor'] = field_color
-
-    except KeyError:
-        print("Something went wrong with merging, saving without comparison data")
-        res = BeautifulSoup(data_pr.to_html(index=False), features='html.parser')
+            if not isnan(value):
+                field_color = color(value, rgmap, 0.5, 1.5)
+            else:
+                field_color = matplotlib.colors.rgb2hex((.5, .5, .5))
+            td.attrs['bgcolor'] = field_color
 
     # for some reason plugin ignores th* flags 🤨
     for th in res.table.thead.tr.select('th'):
@@ -105,13 +116,8 @@ def compare(fname, cfolder, header, results):
     res.table.thead.unwrap()
     res.table.tbody.unwrap()
 
-    with open(os.path.splitext(fname)[0] + '.html','w') as f:
-        f.write(str(res))
-
     return res, os.path.splitext(fname)[0]
 
-    # with open(os.path.splitext(fname)[0] + '.html','w') as f:
-    #     f.write(str(st.to_html()))
 
 # Plugin correctly shows several tables on a page only when all of them are inside of one section
 def summary(reports):
@@ -139,6 +145,10 @@ if __name__ == '__main__':
             cfolder = nightly_dir,
             header  = ['Model', 'Quantization', 'BFloat16',],
             results = ['Accuracy'])
+    performance_pytorch = compare(fname   = 'performance_pytorch.csv',
+            cfolder = nightly_dir,
+            header  = ['Model', 'IPEX', 'BERT Op', 'Quantization', 'BFloat16', 'Batch Size', 'Seq Len'],
+            results = ['Throughput [samples/s]', 'Latency [ms]'])
     benchmark = compare(fname   = 'benchmark.csv',
             cfolder = nightly_dir,
             header  = ['Compiler', 'App', 'TF', 'BERT variant', 'Quantization', 'BFloat16', 'Batch Size'],
@@ -150,5 +160,6 @@ if __name__ == '__main__':
 
     summary([accuracy,
              accuracy_pytorch,
+             performance_pytorch,
              benchmark,
              model_zoo])

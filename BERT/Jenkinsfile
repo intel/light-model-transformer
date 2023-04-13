@@ -74,6 +74,7 @@ def publishReports() {
                     copyArtifacts filter: '*csv', projectName: 'main.bert/Nightly', selector: lastSuccessful(), target: 'nightly'
                     unstash 'accuracy'
                     unstash 'accuracy_pytorch'
+                    unstash 'performance_pytorch'
                     unstash 'benchmark'
                     unstash 'model_zoo'
                     unstash 'bert_op_tests'
@@ -83,6 +84,7 @@ def publishReports() {
 
                     archiveArtifacts artifacts: "accuracy.csv"
                     archiveArtifacts artifacts: "accuracy_pytorch.csv"
+                    archiveArtifacts artifacts: "performance_pytorch.csv"
                     archiveArtifacts artifacts: "benchmark.csv"
                     archiveArtifacts artifacts: "model_zoo.csv"
                     archiveArtifacts artifacts: "fullReport.html"
@@ -322,6 +324,11 @@ def pytorchStages() {
         }
         stage("Accuracy PyTorch") {
             dir('build') {
+                try {
+                    unstash 'accuracy_pytorch'
+                } catch(e) {
+                    print "No accuracy_pytorch stash yet."
+                }
                 sh """#!/bin/bash
                     set -e
                     export PYTHONPATH=\${PYTHONPATH}:${WORKSPACE}/python
@@ -334,6 +341,64 @@ def pytorchStages() {
 
             }
             
+        }
+    }
+}
+
+def pytorchStagesWithRuntimeAxes(List env) {
+    return {
+        withEnv(env) {
+            stage("Performance PyTorch") {
+                dir('build') {
+                    try {
+                        unstash 'performance_pytorch'
+                    } catch(e) {
+                        print "No performance_pytorch stash yet."
+                    }
+                    
+                    for(batch in [1, 8]) {
+                        for(model in ['bert-base-uncased', 'bert-large-uncased']) {
+                            sh """#!/bin/bash
+                                set -e
+                                export PYTHONPATH=\${PYTHONPATH}:${WORKSPACE}/python
+                                export BERT_OP_PT_LIB=${WORKSPACE}/build/src/pytorch_op/libBertOpPT.so
+                                export HUGGINGFACE_HUB_CACHE=/data/huggingface_hub_cache
+                                source /opt/intel/oneapi/setvars.sh intel64
+                                
+                                # Run the vanilla and IPEX models only for --no-quantization and --no-bfloat16
+                                if [[ "${QUANTIZATION}" =~ "--no" && "${BFLOAT16}" =~ "--no" ]]; then
+                                    ${WORKSPACE}/tests/pytorch/benchmark.py \
+                                        --model ${model} \
+                                        --batch-size ${batch} \
+                                        --seq-len 128 \
+                                        --run-time 30 \
+                                        --output-csv performance_pytorch.csv
+                                    
+                                    ${WORKSPACE}/tests/pytorch/benchmark.py \
+                                        --ipex \
+                                        --model ${model} \
+                                        --batch-size ${batch} \
+                                        --seq-len 128 \
+                                        --run-time 30 \
+                                        --output-csv performance_pytorch.csv
+                                fi
+
+                                ${WORKSPACE}/tests/pytorch/benchmark.py \
+                                    --bert-op \
+                                    ${QUANTIZATION} \
+                                    ${BFLOAT16} \
+                                    --model ${model} \
+                                    --batch-size ${batch} \
+                                    --seq-len 128 \
+                                    --run-time 30 \
+                                    --output-csv performance_pytorch.csv
+                            """
+                        }
+                    }
+                    stash includes: 'performance_pytorch.csv', name: 'performance_pytorch'
+
+                }
+            }
         }
     }
 }
@@ -380,6 +445,12 @@ tasks['PyTorch'] = { ->
         checkout scm
         docker.image("${IMAGE_NAME}:pt").inside("--cpuset-cpus=0-10 --init -v ${jenkins_data}:/data") {
             pytorchStages().call()
+            for(Map rt_axis in rt_axes) {
+                List rt_axisEnv = rt_axis.collect { k, v ->
+                    "${k}=${v}"
+                }
+                pytorchStagesWithRuntimeAxes(rt_axisEnv).call()
+            }
         }
     }
 }

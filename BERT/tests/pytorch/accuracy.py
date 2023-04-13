@@ -101,8 +101,18 @@ def main(args: argparse.Namespace):
 
     print(results)
 
+
     if args.csv is not None:
-        results.to_csv(args.csv, sep='\t', index=False)
+        # Try to merge with an existing data file
+        try:
+            data_in_file = pd.read_csv(args.csv, sep=args.sep)
+            results = pd.concat([data_in_file, results])
+        
+        # This is fine, there may not have been a file to merge with
+        except FileNotFoundError as e:
+            pass
+        
+        results.to_csv(args.csv, sep=args.sep, index=False) 
 
 
 if __name__ == '__main__':

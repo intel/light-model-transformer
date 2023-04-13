@@ -132,7 +132,7 @@ def vanilla_model(args):
 
 def ipex_model(args):
     log.info(f'Preparing IPEX-optimized \'{args.model}\'')
-    if args.quantization or args.bf16:
+    if args.quantization or args.bfloat16:
         raise NotImplementedError(
             'Quantization and BFloat16 not yet supported by the IPEX benchmark.')
 
@@ -168,7 +168,7 @@ def bert_op_model(args):
     config = transformers.BertConfig.from_pretrained(
         args.model)
     config.use_quantization = args.quantization
-    config.use_bfloat16 = args.bf16
+    config.use_bfloat16 = args.bfloat16
     if config.use_quantization:
         config.quantization_factors = np.tile(np.tile([-10., 10.], 4),   # min/max values for one layer
                                               config.num_hidden_layers)  # repeat for number of layers
@@ -240,7 +240,7 @@ def main(args):
         'IPEX': str(args.ipex),
         'BERT Op': str(args.bert_op),
         'Quantization': str(args.quantization),
-        'BFloat16': str(args.bf16),
+        'BFloat16': str(args.bfloat16),
         'Batch Size': args.batch_size,
         'Seq Len': args.seq_len,
         'Throughput [samples/s]': f'{throughput:.3f}',
@@ -249,6 +249,19 @@ def main(args):
     results = pd.concat([results, row.to_frame().T], ignore_index=True)
 
     print(results.to_markdown())
+
+    if args.csv is not None:
+
+        # Try to merge with an existing data file
+        try:
+            data_in_file = pd.read_csv(args.csv, sep=args.sep)
+            results = pd.concat([data_in_file, results])
+        
+        # This is fine, there may not have been a file to merge with
+        except FileNotFoundError as e:
+            pass
+        
+        results.to_csv(args.csv, sep=args.sep, index=False) 
 
 
 if __name__ == "__main__":
@@ -264,7 +277,7 @@ if __name__ == "__main__":
 
     parser.add_argument('-q', '--quantization', action='store_true',
                         default=False, help='Use quantization')
-    parser.add_argument('-b', '--bf16', action='store_true',
+    parser.add_argument('-b', '--bfloat16', action='store_true',
                         default=False, help='Use BFloat16 operations')
 
     parser.add_argument('-B', '--batch-size', type=int,
@@ -285,7 +298,10 @@ if __name__ == "__main__":
     parser.add_argument('--log', dest='log_level', choices=['DEBUG', 'INFO', 'WARN', 'ERROR', 'CRITICAL', 'FATAL'],
                         default='WARN', help='Logging verbosity level')
 
-    args = parser.parse_args()
+    parser.add_argument('--output-csv', dest='csv', type=str, help='If provided, results will be saved to this .csv file.')
+    parser.add_argument('--sep', default='\t', help='Separator used when writing to the .csv file.')
+
+    args, _ = parser.parse_known_args()
 
     log.setLevel(args.log_level)
 
