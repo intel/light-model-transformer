@@ -283,7 +283,7 @@ private:
                 return errors::Aborted(e.what());
             }
         }
-        return Status::OK();
+        return {};
     }
 
     std::shared_ptr<BertContext> initBertContext()
@@ -485,7 +485,7 @@ private:
         {
             return errors::InvalidArgument(std::string{"Input mask runtime error: "} + e.what());
         }
-        return Status::OK();
+        return {};
     }
 
     void TransformInputMask(dnnl::memory& src_mem)
