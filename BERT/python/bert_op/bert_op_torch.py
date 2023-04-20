@@ -44,11 +44,14 @@ class BertEncoderOp(transformers.models.bert.modeling_bert.BertEncoder):
                                        self.intermediate_size,
                                        batch_size,
                                        self.num_hidden_layers,
-                                       self.use_quantization, self.use_bfloat16, False)
+                                       self.use_quantization, self.use_bfloat16, self.calibrate_quant_factors)
                 self.bert_op.initialize(self.params, self.quantization_factors)
                 self._initialized = True
 
             return self.bert_op.forward(hidden_states, attention_mask)
+        
+        def get_quantization_factors(self):
+            return self.bert_op.get_quantization_factors()
 
     def __init__(self, config, **kwargs):
         super().__init__(config, **kwargs)
@@ -62,14 +65,20 @@ class BertEncoderOp(transformers.models.bert.modeling_bert.BertEncoder):
         if not hasattr(self.config, "calibrate_quant_factors"):
             self.config.calibrate_quant_factors = False
 
-        self.scripted_bert_op = torch.jit.script(BertEncoderOp.BertEncoderScriptModule(
+        self.scriptable_bert_op = BertEncoderOp.BertEncoderScriptModule(
             self.config.max_position_embeddings,
             self.config.hidden_size,
             self.config.intermediate_size,
             self.config.num_hidden_layers,
-            self.config.use_quantization, self.config.use_bfloat16, self.config.quantization_factors, False,
+            self.config.use_quantization, self.config.use_bfloat16, self.config.quantization_factors,
+            self.config.calibrate_quant_factors,
             [*self.parameters()])
-        )
+
+        # Quant factor calibration only works in eager mode, so we only use `torch.jit.script`
+        # if calibration mode is not enabled. Otherwise, we cannot access the `get_quantization_factors` method.
+        if not self.config.calibrate_quant_factors:
+            self.scriptable_bert_op = torch.jit.script(self.scriptable_bert_op)
+
 
     def forward(
         self,
@@ -111,7 +120,7 @@ class BertEncoderOp(transformers.models.bert.modeling_bert.BertEncoder):
         if output_hidden_states:
             raise ValueError("output_hidden_states option is not supported.")
 
-        output: torch.FloatTensor = self.scripted_bert_op(
+        output: torch.FloatTensor = self.scriptable_bert_op(
             hidden_states, attention_mask)
 
         if not return_dict:
@@ -122,4 +131,4 @@ class BertEncoderOp(transformers.models.bert.modeling_bert.BertEncoder):
             )
 
     def get_quantization_factors(self):
-        return self.bert_op.get_quantization_factors()
+        return self.scriptable_bert_op.get_quantization_factors()

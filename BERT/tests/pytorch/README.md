@@ -103,3 +103,63 @@ has also been tested on RoBERTa models, which will likely be added to the Pytorc
     This means that any model which uses `transformers.models.bert.modeling_bert.BertEncoder`, will use
     `bert_op.BertEncoderOp` instead, if it is created after `import bert_op`. Models created before the import are
     unaffected.
+
+
+## Additional options
+
+### QINT8 and BF16
+
+The BERT operator can utilize Int8 quantization and BFloat16 computations on supported hardware. To enable these features,
+add appropriate fields to the BertConfig before loading the model:
+
+```python
+import transformers
+
+... # your code
+
+import bert_op # Important, do this at any point BEFORE the call to `transformers.from_pretrained`
+config = transformers.BertConfig.from_pretrained('bert-base-uncased')
+config.use_bfloat16 = True # or False, defaults to False if not provided
+config.use_quantization = True # or False, defaults to False if not provided
+config.quantization_factors = [...] # List of quantization factors, necessary if config.use_quantization == True
+                                    # See [below](#quantization-factor-calibration) for instruction on how to get this
+model = transformers.BertModel.from_pretrained('bert-base-uncased', config=config)
+
+output = model(**inputs)
+
+```
+
+### Quantization factor calibration
+
+NOTE: Calibration only works in eager mode. Trying to `torch.jit.trace` or `torch.jit.freeze` the model in calibration
+mode will fail.
+
+When using the PyTorch backend, the BERT operator accepts quantization factors from a simple python list in the BertConfig.
+In order to get these factors, prepare the BertConfig for FP32 mode and set the calibration flag, execute some calibration
+workload, then retrieve the factors from the `BertEncoderOp`:
+
+```python
+import transformers
+
+... # your code
+
+import bert_op # Important, do this at any point BEFORE the call to `transformers.from_pretrained`
+config = transformers.BertConfig.from_pretrained('bert-base-uncased')
+config.use_bfloat16 = False     # These two can be omitted, 
+config.use_quantization = False # they are here just for clarity
+config.calibrate_quant_factors = True # This enables calibration mode
+model = transformers.BertModel.from_pretrained('bert-base-uncased', config=config)
+
+# IMPORTANT: no tracing and freezing the model here. The below fill fail in calibration mode:
+# model = torch.jit.trace(model, data, strict=False)
+# model = torch.jit.freeze(model)
+
+output = model(**inputs) # model now executes in FP32 mode, and `TFBertEncoderOp` calibrates the quantization factors
+
+quant_factors = model.encoder.get_quantization_factors() # Save the contents of quant_factors so that they can be reused
+                                                         # in subsequent executions
+
+```
+
+Upon next execution, you can set `config.calibrate_quant_factors = False`, `config.use_quantization = True` and set the
+`config.quantization_factors` list to the values previously received from calibration.
