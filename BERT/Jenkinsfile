@@ -17,7 +17,7 @@ IMAGE_NAME = "bert_${BUILD_NUMBER}"
 // <matrix parameters initialized here>
 Map compile_time_axes = [
     TF_VERSION:   ['1.15.4', '2.5.2', '2.9.0'],
-    CXX_COMPILER: ['icpc', 'g++', 'icpx']
+    CXX_COMPILER: ['g++', 'icpx']
 ]
 
 List ct_axes = getMatrixAxes(compile_time_axes).findAll { axis ->
@@ -289,14 +289,28 @@ def testStages(List env) {
     }
 }
 
+def requirementsForce(TF_VERSION)
+{
+    sh 'git reset --hard || echo "unable to reset repo"'
+    sh 'git clean -ffdx || echo "unable to clean repo"'
+    if (! TF_VERSION.startsWith('2.5.2')) {
+        return
+    }
+    def TF_TEXT_VERSION = ['2.5.2': '2.5.0']
+    sh "sed -r -i 's|(tensorflow-text)|\\1==${TF_TEXT_VERSION[TF_VERSION]}|' requirements-tf2.txt"
+}
+
 def buildDockerfileTensorflow(List TF_VERSION) {
     TF_VERSION.each { tf ->
+    requirementsForce(tf)
     // tf 1.15 works with python3.6 only
     docker.build("${IMAGE_NAME}:${tf}", "--target=bert-op-tensorflow \
                                     --build-arg TF_VERSION=${tf} \
                                     --build-arg TF_requirements=requirements-tf${tf.replaceFirst(/(\d+)\..*/, '$1')}.txt \
                                     --build-arg PYTHON_VERSION=${tf.startsWith('1') ? "3.6" : "3.9"} \
                                     --build-arg username=\$(id -un)  --build-arg userid=\$(id -u) --build-arg usergroup=\$(id -g) \
+                                    --build-arg http_proxy=\${http_proxy} \
+                                    --build-arg https_proxy=\${https_proxy} \
                                     -f Dockerfile/Dockerfile-ci .")
     }
 }
@@ -407,6 +421,8 @@ def buildDockerfilePytorch()
 {
     docker.build("${IMAGE_NAME}:pt", "--target=bert-op-pytorch \
                                     --build-arg username=\$(id -un)  --build-arg userid=\$(id -u) --build-arg usergroup=\$(id -g) \
+                                    --build-arg http_proxy=\${http_proxy} \
+                                    --build-arg https_proxy=\${https_proxy} \
                                     -f Dockerfile/Dockerfile-ci .")
 }
 
@@ -426,7 +442,7 @@ for(Map ct_axis in ct_axes) {
                 checkout scm
                 docker.image("${IMAGE_NAME}:${TF_VERSION}").inside("--privileged --init -v ${jenkins_data}:/data") {
                     buildStages(ct_axisEnv).call()
-                    if (CXX_COMPILER == "icpc") {
+                    if (CXX_COMPILER == "icpx") {
                         for(Map rt_axis in rt_axes) {
                             List rt_axisEnv = rt_axis.collect { k, v ->
                                 "${k}=${v}"

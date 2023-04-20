@@ -1,13 +1,16 @@
+ARG DISTRIBUTOR=ubuntu
 ARG UBUNTU_VERSION=20.04
 
-FROM ubuntu:${UBUNTU_VERSION} as base
+FROM ${DISTRIBUTOR}:${UBUNTU_VERSION} as base
 
-# ENV http_proxy http://my-proxy.com
-# ENV https_proxy http://my-proxy.com
-# ENV no_proxy localnet.com
+ENV http_proxy ${http_proxy}
+ENV https_proxy ${https_proxy}
+ENV no_proxy ${no_proxy}
+
 ENV TF_ENABLE_ONEDNN_OPTS 1
 
-RUN echo "Acquire::http::proxy \"${http_proxy}\";" >> /etc/apt/apt.conf
+RUN echo "Acquire::http::proxy \"${http_proxy}\";" > /etc/apt/apt.conf
+RUN echo "Acquire::https::proxy \"${https_proxy}\";" >> /etc/apt/apt.conf
 
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -41,8 +44,10 @@ RUN apt-get install -y \
         --no-install-recommends
 
 # Install oneAPI components
-RUN wget https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB -O - | apt-key add - && \
-    echo "deb https://apt.repos.intel.com/oneapi all main" | tee /etc/apt/sources.list.d/oneAPI.list && \
+RUN wget -O- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | \
+    gpg --dearmor | tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null && \
+    echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | \
+    tee /etc/apt/sources.list.d/oneAPI.list && \
     apt-get update && \
     apt-get install -y \
         intel-oneapi-tbb \
@@ -55,12 +60,12 @@ SHELL ["/bin/bash", "-c"]
 
 WORKDIR /oneapi_src
 ARG DNNL_BRANCH=rls-v2.7
-RUN git clone --depth 1 --branch $DNNL_BRANCH https://github.com/oneapi-src/oneDNN.git oneDNN
+RUN git clone --depth 10 --branch $DNNL_BRANCH https://github.com/oneapi-src/oneDNN.git oneDNN
 RUN git config --global http.proxy $http_proxy
 WORKDIR /oneapi_src/build
 RUN source /opt/intel/oneapi/setvars.sh intel64 && \
-    cmake -DCMAKE_CXX_COMPILER=icpc \
-          -DCMAKE_C_COMPILER=icc \
+    cmake -DCMAKE_CXX_COMPILER=icpx \
+          -DCMAKE_C_COMPILER=icx \
           -DDNNL_CPU_RUNTIME=TBB \
           -DDNNL_LIBRARY_TYPE=SHARED \
           -DDNNL_GPU_RUNTIME=NONE \
@@ -126,3 +131,8 @@ USER ${username}
 COPY requirements-pt.txt /tmp/requirements-pt.txt
 RUN python -m pip install --upgrade pip wheel
 RUN python -m pip install -r /tmp/requirements-pt.txt
+
+USER root
+ARG cache_bomb
+RUN echo $cache_bomb # From this point on, cache is invalidated and every subsequent step will be done fresh
+RUN apt-get update && apt-get upgrade -y
