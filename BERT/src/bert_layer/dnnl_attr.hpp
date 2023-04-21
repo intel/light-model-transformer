@@ -62,7 +62,7 @@ public:
         return *this;
     }
 
-    BuildAttrs& Binary(dnnl::algorithm algo, dnnl::memory::desc memory_desc) {
+    BuildAttrs& Binary(dnnl::algorithm algo, const dnnl::memory::desc& memory_desc) {
         attrs_.PostOps()->append_binary(algo, memory_desc);
         return *this;
     }

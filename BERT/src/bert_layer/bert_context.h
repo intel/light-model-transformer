@@ -53,7 +53,7 @@ public:
 
     class BufferHandler {
         friend class BertContext;
-        BufferHandler(std::weak_ptr<BertContext> mgr, dnnl::memory buf, dnnl::memory::desc md)
+        BufferHandler(std::weak_ptr<BertContext> mgr, dnnl::memory buf, const dnnl::memory::desc& md)
             : mgr_{std::move(mgr)}
             , buffer_{std::move(buf)}
             , memory_{md, buffer_.get_engine(), buffer_.get_data_handle()}
@@ -63,9 +63,13 @@ public:
         BufferHandler& operator=(const BufferHandler&) = delete;
         BufferHandler(BufferHandler&&) = default;
         BufferHandler& operator=(BufferHandler&&) = default;
-        ~BufferHandler() {
+        ~BufferHandler() noexcept {
             if (auto mgr = mgr_.lock()) {
-                mgr->PushBuffer(buffer_);
+                try {
+                    mgr->PushBuffer(buffer_);
+                } catch(...) {
+                    // just ignore PushBuffer() errors
+                }
             }
         }
 

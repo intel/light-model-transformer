@@ -288,10 +288,10 @@ struct InnerProductDims {
 };
 
 template <class PrimType>
-InnerProductDims MakeInnerProductDims(int batch, int m, int n, int );
+InnerProductDims MakeInnerProductDims(dnnl::memory::dim batch, int m, int n, int );
 
 template <>
-InnerProductDims MakeInnerProductDims<dnnl::inner_product_forward>(int batch, int m, int n, int k) {
+InnerProductDims MakeInnerProductDims<dnnl::inner_product_forward>(dnnl::memory::dim batch, int m, int n, int k) {
     return {
         {batch * m, k}, // src_tz
         {n, k},         // weights_tz
@@ -306,7 +306,7 @@ InnerProductDims MakeInnerProductDims<dnnl::inner_product_forward>(int batch, in
 }
 
 template <>
-InnerProductDims MakeInnerProductDims<dnnl::convolution_forward>(int batch, int m, int n, int k) {
+InnerProductDims MakeInnerProductDims<dnnl::convolution_forward>(dnnl::memory::dim batch, int m, int n, int k) {
     return {
         {1, k, batch * m}, // src_tz
         {n, k, 1},         // weights_tz

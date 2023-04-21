@@ -133,7 +133,7 @@ public:
         return AsDnnlMemory(tensor, md, engine);
     }
 
-    dnnl::memory AsDnnlMemory(const tensorflow::Tensor& tensor, dnnl::memory::desc md, dnnl::engine& engine) const
+    dnnl::memory AsDnnlMemory(const tensorflow::Tensor& tensor, const dnnl::memory::desc& md, dnnl::engine& engine) const
     {
         auto data = reinterpret_cast<void*>(const_cast<char*>(tensor.tensor_data().data()));
         return dnnl::memory{md, engine, data};

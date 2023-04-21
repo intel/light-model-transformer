@@ -41,9 +41,13 @@ public:
         : mem_{std::move(mem)}
         , ptr_{mem_ ? mem_.map_data<T>() : nullptr}{}
 
-    ~MemoryAccessor() {
-        if (ptr_ && mem_) {
-            mem_.unmap_data(ptr_);
+    ~MemoryAccessor() noexcept {
+        try {
+            if (ptr_ && mem_) {
+                mem_.unmap_data(ptr_);
+            }
+        } catch(...) {
+            // just ignore exceptions from unmap_data()
         }
     }
 

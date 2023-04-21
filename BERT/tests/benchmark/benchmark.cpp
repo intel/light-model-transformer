@@ -75,22 +75,23 @@ struct LayerWeights
     std::generate(beta2Buffer.begin(), beta2Buffer.end(), rand);
     std::generate(intermediateBiasBuffer.begin(), intermediateBiasBuffer.end(), rand);
     
-    queryWeight = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{config.hiddenSize * config.hiddenSize}, queryWeightBuffer.data());
-    keyWeight = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{config.hiddenSize * config.hiddenSize}, keyWeightBuffer.data());
-    valueWeight = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{config.hiddenSize * config.hiddenSize}, valueWeightBuffer.data());
-    attentionOutputWeight = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{config.hiddenSize * config.hiddenSize}, attentionOutputWeightBuffer.data());
-    intermediateWeight = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{config.hiddenSize * config.intermediateSize}, intermediateWeightBuffer.data());
-    outputWeight = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{config.hiddenSize * config.intermediateSize}, outputWeightBuffer.data());
-    queryBias = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{config.hiddenSize}, queryBiasBuffer.data());
-    keyBias = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{config.hiddenSize}, keyBiasBuffer.data());
-    valueBias = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{config.hiddenSize}, valueBiasBuffer.data());
-    attentionOutputBias = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{config.hiddenSize}, attentionOutputBiasBuffer.data());
-    outputBias = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{config.hiddenSize}, outputBiasBuffer.data());
-    gamma1 = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{config.hiddenSize}, gamma1Buffer.data());
-    beta1 = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{config.hiddenSize}, beta1Buffer.data());
-    gamma2 = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{config.hiddenSize}, gamma2Buffer.data());
-    beta2 = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{config.hiddenSize}, beta2Buffer.data());
-    intermediateBias = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{config.intermediateSize}, intermediateBiasBuffer.data());
+    const dnnl::memory::dim hiddenSize = config.hiddenSize;
+    queryWeight           = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{hiddenSize * config.hiddenSize}, queryWeightBuffer.data());
+    keyWeight             = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{hiddenSize * config.hiddenSize}, keyWeightBuffer.data());
+    valueWeight           = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{hiddenSize * config.hiddenSize}, valueWeightBuffer.data());
+    attentionOutputWeight = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{hiddenSize * config.hiddenSize}, attentionOutputWeightBuffer.data());
+    intermediateWeight    = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{hiddenSize * config.intermediateSize}, intermediateWeightBuffer.data());
+    outputWeight          = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{hiddenSize * config.intermediateSize}, outputWeightBuffer.data());
+    queryBias             = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{hiddenSize}, queryBiasBuffer.data());
+    keyBias               = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{hiddenSize}, keyBiasBuffer.data());
+    valueBias             = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{hiddenSize}, valueBiasBuffer.data());
+    attentionOutputBias   = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{hiddenSize}, attentionOutputBiasBuffer.data());
+    outputBias            = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{hiddenSize}, outputBiasBuffer.data());
+    gamma1                = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{hiddenSize}, gamma1Buffer.data());
+    beta1                 = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{hiddenSize}, beta1Buffer.data());
+    gamma2                = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{hiddenSize}, gamma2Buffer.data());
+    beta2                 = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{hiddenSize}, beta2Buffer.data());
+    intermediateBias      = dnnl_wrappers::CloneMemory(eng, stm, dnnl::memory::dims{config.intermediateSize}, intermediateBiasBuffer.data());
   }
 public:
   dnnl::memory queryWeight;
@@ -193,7 +194,7 @@ void benchmark(float *input, const Config& config)
 
   for (int i = 0; i < warmupTimes + benchmarkTimes; ++i)
   {
-    dnnl::memory::dims dims{config.batch * config.maxTokenSize, config.hiddenSize};
+    dnnl::memory::dims dims{static_cast<dnnl::memory::dim>(config.batch) * config.maxTokenSize, config.hiddenSize};
     auto input_buffer = dnnl_wrappers::AttachMemory(ctx->dnnl_context.getEngine(), dims, input, false);
     auto buffer = bert_layers.front()->PrepareInput(input_buffer);
 

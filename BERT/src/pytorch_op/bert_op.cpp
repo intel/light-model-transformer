@@ -30,7 +30,7 @@ public:
         return AsDnnlMemory(tensor, md, engine);
     }
 
-    static dnnl::memory AsDnnlMemory(const torch::Tensor& tensor, dnnl::memory::desc md, dnnl::engine& engine, bool copy = false)
+    static dnnl::memory AsDnnlMemory(const torch::Tensor& tensor, const dnnl::memory::desc& md, dnnl::engine& engine, bool copy = false)
     {
         return dnnl::memory{md, engine, tensor.data_ptr()};
     }

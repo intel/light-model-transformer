@@ -323,7 +323,9 @@ public:
              || input_md.dims() == dnnl::memory::dims{ctx->batch_,  ctx->maxTokenSize, ctx->hiddenSize}));
 
         // join batch and maxTokenSize dimensions
-        auto reshaped_input_md = ndims(input_md) == 2 ? input_md : input_md.reshape({ctx->batch_ * ctx->maxTokenSize, ctx->hiddenSize});
+        auto reshaped_input_md = ndims(input_md) == 2
+                                 ? input_md
+                                 : input_md.reshape({static_cast<dnnl::memory::dim>(ctx->batch_) * ctx->maxTokenSize, ctx->hiddenSize});
         // reinterpret to match result_md dimensions
         using namespace dnnl_wrappers;
         reshaped_input_md = ConvertIPDataDims(reshaped_input_md, result_md.data.ndims);
@@ -355,7 +357,9 @@ public:
              || output_md.dims() == dnnl::memory::dims{ctx->batch_,  ctx->maxTokenSize, ctx->hiddenSize}));
 
         // join batch and maxTokenSize dimensions
-        auto reshaped_output_md = ndims(output_md) == 2 ? output_md : output_md.reshape({ctx->batch_ * ctx->maxTokenSize, ctx->hiddenSize});
+        auto reshaped_output_md = ndims(output_md) == 2 
+                                ? output_md
+                                : output_md.reshape({static_cast<dnnl::memory::dim>(ctx->batch_) * ctx->maxTokenSize, ctx->hiddenSize});
         // reinterpret to match result_md dimensions
         using namespace dnnl_wrappers;
         auto reshaped_output = ReLayoutMemory(output, ConvertIPDataDims(reshaped_output_md, result_md.data.ndims));
