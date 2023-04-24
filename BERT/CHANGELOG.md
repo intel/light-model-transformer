@@ -1,5 +1,16 @@
 # BERT Model Optimization Change Log
 
+## v0.9 - 2023-04
+
+### Added
+
+* Completed PyTorch integration. See [tests README](tests/pytorch/README.md) for details
+* TF and PT integration demos. See [samples](samples/) directory
+* Performance optimizations including:
+  * Use oneDNN Inner Product with Convolution 1x1 for linear operations
+  * Optimized infrastructure code
+* Added patterns to modify RoBERTa models. See pattern files [here](util/tf2-hf-roberta/)
+
 ## v0.8 - 2023-02-22
 
 ### Added
