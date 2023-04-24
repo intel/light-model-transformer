@@ -7,3 +7,4 @@ tf-models-official
 pytest
 transformers
 datasets
+setuptools>=65.5.1
