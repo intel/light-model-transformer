@@ -285,6 +285,29 @@ def testStages(List env) {
                     stash includes: 'model_zoo.csv', name: 'model_zoo'
                 }
             }
+            if (TF_VERSION.startsWith('2'))
+            stage("no-model-modifier ${CXX_COMPILER} - ${TF_VERSION} - ${QUANTIZATION} - ${BFLOAT16}"){
+                // In this stage we only want to run a single iteration of the benchmark to verify that the
+                // no-model-modifier approach is working. We don't need to repeat the TF performance runs.
+                // We just `set -e` to make sure the stage fails
+                dir('build') {
+                    sh """#!/bin/bash
+                        set -e
+                        export PYTHONPATH=\${PYTHONPATH}:${WORKSPACE}/python
+                        source /opt/intel/oneapi/setvars.sh intel64
+                        export BERT_OP_LIB=${WORKSPACE}/build/src/tf_op/libBertOp.so
+                        export QUANT_FACTORS_FILE=${WORKSPACE}/jenkins_resources/tf2/quant_factors_uncased_L-12_H-768_A-12.txt
+                        ${WORKSPACE}/tests/tf2_no_model_modifier/benchmark.py \
+                            -m bert-base-uncased \
+                            --iterations 1 \
+                            --bert-op \
+                            ${QUANTIZATION} \
+                            ${BFLOAT16} \
+                            --quant-factors-path \${QUANT_FACTORS_FILE}
+
+                    """
+                }
+            }
         }
     }
 }

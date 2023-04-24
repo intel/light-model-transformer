@@ -93,7 +93,6 @@ class BertEncoderOp(transformers.models.bert.modeling_bert.BertEncoder):
         output_hidden_states: Optional[bool] = False,
         return_dict: Optional[bool] = True,
     ) -> Union[Tuple[torch.Tensor], BaseModelOutputWithPastAndCrossAttentions]:
-
         if attention_mask is None:
             raise ValueError("attention_mask is required.")
 

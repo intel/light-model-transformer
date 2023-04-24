@@ -1,5 +1,6 @@
 tensorflow
 pandas
+tabulate
 tensorflow-text
 tensorflow-datasets
 tensorflow-hub

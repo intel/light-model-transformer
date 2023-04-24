@@ -1,5 +1,5 @@
 #!/bin/bash
 
-cd ../..
+cd $(dirname $0)/../..
 
 docker build -f samples/tensorflow_performance/Dockerfile $@ .
