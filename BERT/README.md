@@ -22,7 +22,7 @@ If you wish to modify your custom TensorFlow model, we provide the step by step 
 
 BERT model optimization supports systems meeting the following requirements:
 
-* [oneDNN Library](https://github.com/oneapi-src/oneDNN) 2.6 or later
+* [oneDNN Library](https://github.com/oneapi-src/oneDNN) 3.1 or later
 * C++ compiler
 * [CMake](https://cmake.org/download/)
 * Linux based operating system 

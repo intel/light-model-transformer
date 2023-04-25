@@ -35,8 +35,12 @@ public:
         dnnl::memory result{md, stm.get_engine()};
 
         // No need to check for nullptr, implicitly convert to dnnl::primitive_attr
-        dnnl::reorder rdr{mem_, result, attr_};
-        rdr.execute(stm, mem_, result);
+        dnnl::reorder rdr{mem_, result, attr_.GetAttrs()};
+        auto args = attr_.GetArgs();
+        args.insert({
+            {DNNL_ARG_SRC, mem_},
+            {DNNL_ARG_DST, result}});
+        rdr.execute(stm, args);
         return result;
     }
 
@@ -107,6 +111,17 @@ dnnl::memory CloneMemory(const dnnl::engine& eng, dnnl::stream& stm, dnnl::memor
     return dst;
 }
 
+template <class T, class A = std::allocator<T>>
+dnnl::memory ToMemory(const dnnl::engine& eng, dnnl::stream& stm, const std::vector<T,A> v) {
+    dnnl::memory::dim size = v.size();
+    return CloneMemory(eng, stm, {static_cast<dnnl::memory::dim>(size)}, v.data());
+}
+
+template <class T>
+dnnl::memory ToMemory(const dnnl::engine& eng, dnnl::stream& stm, const T v) {
+    return CloneMemory(eng, stm, {1}, &v);
+}
+
 /**
  * @brief Reshape a memory object with a validity check.
  * 
@@ -129,18 +144,18 @@ dnnl::memory ReshapeMemory(const dnnl::memory& memory, const dnnl::memory::dims&
  * @param layout The target descriptor, data type will be overwritten.
  * @return The reinterpreted memory.
  */
-dnnl::memory ReLayoutMemory(const dnnl::memory& mem, dnnl::memory::desc layout) {
-    layout.data.data_type = mem.get_desc().data.data_type;
+dnnl::memory ReLayoutMemory(const dnnl::memory& mem, const dnnl::memory::desc& layout) {
+    assert(layout.get_data_type() == mem.get_desc().get_data_type());
     assert(layout.get_size() <= mem.get_desc().get_size());
     return dnnl::memory{layout, mem.get_engine(), mem.get_data_handle()};
 }
 
-DataSource ScaledData(const dnnl::memory& mem, float scale, float zero_point = 0.f) {
-        return DataSource(mem, BuildAttrs().Scale(scale).ZeroPoint(zero_point));
+DataSource ScaledData(const dnnl::memory& mem, const dnnl::memory& scale, const dnnl::memory& zero_point = {}) {
+    return DataSource(mem, BuildAttrs().Scale(scale, DNNL_ARG_DST).ZeroPoint(zero_point, DNNL_ARG_DST));
 }
 
-CachedDataSource ScaledCachedData(const dnnl::memory& mem, float scale, float zero_point = 0.f) {
-    return  CachedDataSource(mem, BuildAttrs().Scale(scale).ZeroPoint(zero_point));
+CachedDataSource ScaledCachedData(const dnnl::memory& mem, const dnnl::memory& scale, const dnnl::memory& zero_point = {}) {
+    return CachedDataSource(mem, BuildAttrs().Scale(scale, DNNL_ARG_DST).ZeroPoint(zero_point, DNNL_ARG_DST));
 }
 
 } // namespace dnnl_wrappers

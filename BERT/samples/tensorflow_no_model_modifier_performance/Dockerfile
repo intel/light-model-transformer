@@ -41,8 +41,8 @@ RUN apt-get update && \
         intel-oneapi-compiler-dpcpp-cpp-and-cpp-classic
 
 
-# ...but we must build oneDNN from source, since we need v2.7
-ARG DNNL_BRANCH=rls-v2.7
+# ...but we must build oneDNN from source, since we need v3.1
+ARG DNNL_BRANCH=rls-v3.1
 WORKDIR /tmp/oneapi_src
 RUN git clone --depth 1 --branch $DNNL_BRANCH https://github.com/oneapi-src/oneDNN.git oneDNN
 

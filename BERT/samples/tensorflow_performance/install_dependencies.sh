@@ -48,8 +48,8 @@ apt-get install -y \
 tmp_dir=$(mktemp -d)
 trap "rm -rf $tmp_dir" EXIT
 
-# ...but we must build oneDNN from source, since we need v2.7
-DNNL_BRANCH=rls-v2.7
+# ...but we must build oneDNN from source, since we need v3.1
+DNNL_BRANCH=rls-v3.1
 pushd $tmp_dir
 git clone --depth 1 --branch $DNNL_BRANCH https://github.com/oneapi-src/oneDNN.git oneDNN
 

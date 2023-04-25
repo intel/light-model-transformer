@@ -6,6 +6,7 @@
 #define __DNNL_ATTR__
 
 #include <cmath>
+#include <unordered_map>
 
 #include "dnnl_common.h"
 
@@ -17,29 +18,22 @@ namespace dnnl_wrappers {
 class BuildAttrs {
 public:
     static constexpr float noScale = 1.f;
-    static constexpr int noShift = 0;
+    static constexpr int32_t noShift = 0;
 
-    BuildAttrs& Scale(float scale) {
-        if (scale != noScale) {
-            attrs_.Attr()->set_output_scales(0, {scale});
+    BuildAttrs& Scale(const dnnl::memory& scale, int arg, int mask = 0) {
+        if (scale) {
+            attrs_.Attr()->set_scales_mask(arg, mask);
+            attrs_.Args()[DNNL_ARG_ATTR_SCALES | arg] = scale;
         }
         return *this;
     }
 
-    BuildAttrs& Scale(int mask, std::vector<float> scale) {
-        attrs_.Attr()->set_output_scales(mask, scale);
-        return *this;
-    }
-
-    BuildAttrs& ZeroPoint(int shift, int arg = DNNL_ARG_DST) {
-        if (shift != noShift) {
-            attrs_.Attr()->set_zero_points(arg, 0, {shift});
+    BuildAttrs& ZeroPoint(const dnnl::memory& shift, int arg, int mask = 0) {
+        if (shift) {
+            attrs_.Attr()->set_zero_points_mask(arg, mask);
+            attrs_.Args()[DNNL_ARG_ATTR_ZERO_POINTS | arg] = shift;
         }
         return *this;
-    }
-
-    BuildAttrs& ZeroPoint(float shift, int arg = DNNL_ARG_DST) {
-        return ZeroPoint(static_cast<int>(std::round(shift)), arg);
     }
 
     BuildAttrs& ScratchpadModeUser() {
@@ -52,8 +46,8 @@ public:
         return *this;
     }
 
-    BuildAttrs& Eltwise(dnnl::algorithm algo, float alpha = 0, float beta = 0, float scale = 1.f) {
-        attrs_.PostOps()->append_eltwise(scale, algo, alpha, beta);
+    BuildAttrs& Eltwise(dnnl::algorithm algo, float alpha = 0, float beta = 0) {
+        attrs_.PostOps()->append_eltwise(algo, alpha, beta);
         return *this;
     }
 
@@ -71,7 +65,9 @@ public:
         return attrs_.Empty();
     }
 
-    operator dnnl::primitive_attr() const { return attrs_.MakeAttr(); }
+    dnnl::primitive_attr GetAttrs() const { return attrs_.MakeAttr(); }
+
+    const std::unordered_map<int, dnnl::memory>& GetArgs() const { return attrs_.Args(); }
 
 private:
     class AttrStore {
@@ -90,6 +86,14 @@ private:
             return &post_ops_;
         }
 
+        std::unordered_map<int, dnnl::memory>& Args() {
+            return args_;
+        }
+
+        const std::unordered_map<int, dnnl::memory>& Args() const {
+            return args_;
+        }
+
         bool Empty() const {
             return !attr_ && !post_ops_;
         }
@@ -105,6 +109,7 @@ private:
     private:
         dnnl::primitive_attr attr_{nullptr};
         dnnl::post_ops post_ops_{nullptr};
+        std::unordered_map<int, dnnl::memory> args_;
     };
 
     AttrStore attrs_;

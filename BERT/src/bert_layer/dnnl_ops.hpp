@@ -21,8 +21,9 @@ public:
     MatMul(const dnnl::engine& eng,
         const dnnl::memory::desc& src_md, const dnnl::memory::desc& weights_md,
         const dnnl::memory::desc& bias_md, const dnnl::memory::desc& dst_md,
-        const dnnl::primitive_attr& attr)
-        : prim_{dnnl::matmul::primitive_desc{dnnl::matmul::desc{src_md, weights_md, bias_md, dst_md}, attr, eng}} {
+        const BuildAttrs& attr)
+        : attrs_(attr)
+        , prim_{dnnl::matmul::primitive_desc{eng, src_md, weights_md, bias_md, dst_md, attrs_.GetAttrs()}} {
     }
 
     MatMul(const dnnl::primitive& prim) : prim_(prim) {}
@@ -34,12 +35,14 @@ public:
         auto src_memory = src.GetData(stm, prim_desc.src_desc());
         auto weights_memory = weights.GetData(stm, prim_desc.weights_desc());
         auto bias_memory = bias.GetData(stm, prim_desc.bias_desc());
-        prim_.execute(stm, {
+        auto args = attrs_.GetArgs();
+        args.insert({
             { DNNL_ARG_SRC, src_memory },
             { DNNL_ARG_WEIGHTS, weights_memory },
             { DNNL_ARG_BIAS, bias_memory },
             { DNNL_ARG_DST, dst_memory },
             { DNNL_ARG_SCRATCHPAD, scratchpad } });
+        prim_.execute(stm, args);
         // FIXME(rfsaliev) have to wait due to lifetime of x_memory variables
         stm.wait();
     }
@@ -53,12 +56,13 @@ public:
         auto src_memory = src.GetData(stm, prim_desc.src_desc());
         auto weights_memory = weights.GetData(stm, prim_desc.weights_desc());
 
-        std::unordered_map<int, dnnl::memory> args = {
+        auto args = attrs_.GetArgs();
+        args.insert({
             {DNNL_ARG_SRC, src_memory},
             {DNNL_ARG_WEIGHTS, weights_memory},
             {DNNL_ARG_DST, dst_memory},
             {DNNL_ARG_SCRATCHPAD, scratchpad}
-        };
+        });
 
         // (krzychut)
         // Due to https://github.com/oneapi-src/oneDNN/issues/1337,
@@ -95,6 +99,7 @@ public:
     }
 
 private:
+    BuildAttrs attrs_;
     dnnl::primitive prim_;
 };
 
@@ -114,7 +119,7 @@ struct MatMulDims {
 inline MatMul MakeMatMul(const dnnl::engine& eng, int batch, int m, int n, int k, 
                         dnnl::memory::data_type src_dt, dnnl::memory::data_type weights_dt,
                         dnnl::memory::data_type bias_dt, dnnl::memory::data_type dst_dt,
-                        const dnnl::primitive_attr& attr = {}) {
+                        const BuildAttrs& attr = {}) {
 
     const MatMulDims dims{batch, m, n, k};
 
@@ -131,7 +136,7 @@ inline MatMul MakeMatMul(const dnnl::engine& eng, int batch, int m, int n, int k
 }
 
 template <typename T_src, typename T_wei, typename T_bias, typename T_dst>
-MatMul MakeMatMul(const dnnl::engine& eng, int batch, int m, int n, int k, const dnnl::primitive_attr& attr = {}) {
+MatMul MakeMatMul(const dnnl::engine& eng, int batch, int m, int n, int k, const BuildAttrs& attr = {}) {
     const auto src_dt = DnnlDataType<T_src>::value;
     const auto weights_dt = DnnlDataType<T_wei>::value;
     const auto bias_dt = DnnlDataType<T_bias>::value;
@@ -161,14 +166,13 @@ dnnl::inner_product_forward BuildInnerProductPrim<dnnl::inner_product_forward>(
     const dnnl::primitive_attr& attr) {
     return dnnl::inner_product_forward{
             dnnl::inner_product_forward::primitive_desc{
-                dnnl::inner_product_forward::desc{
-                    dnnl::prop_kind::forward_inference,
-                    src_md,
-                    weights_md,
-                    bias_md,
-                    dst_md},
-                attr,
-                eng
+                eng,
+                dnnl::prop_kind::forward_inference,
+                src_md,
+                weights_md,
+                bias_md,
+                dst_md,
+                attr
             }};
 }
 
@@ -182,14 +186,22 @@ dnnl::convolution_forward BuildInnerProductPrim<dnnl::convolution_forward>(
     const dnnl::primitive_attr& attr) {
     return dnnl::convolution_forward{
             dnnl::convolution_forward::primitive_desc{
-                dnnl::convolution_forward::desc{
-                    dnnl::prop_kind::forward_inference,
-                    dnnl::algorithm::convolution_direct,
-                    src_md, weights_md, bias_md, dst_md, {1,1}, {0,0}, {0,0}},
-                attr,
-                eng
+                eng,
+                dnnl::prop_kind::forward_inference,
+                dnnl::algorithm::convolution_direct,
+                src_md, weights_md, bias_md, dst_md, {1,1}, {0,0}, {0,0},
+                attr
             }};
 }
+
+template<class PrimType>
+constexpr bool AsymQuantizationSupported();
+
+template<>
+constexpr bool AsymQuantizationSupported<dnnl::inner_product_forward>(){ return false; }
+
+template<>
+constexpr bool AsymQuantizationSupported<dnnl::convolution_forward>(){ return true; }
 
 
 template <class PrimType>
@@ -198,8 +210,9 @@ public:
     InnerProduct(const dnnl::engine& eng,
         const dnnl::memory::desc& src_md, const dnnl::memory::desc& weights_md,
         const dnnl::memory::desc& bias_md, const dnnl::memory::desc& dst_md,
-        const dnnl::primitive_attr& attr)
-        : prim_{BuildInnerProductPrim<PrimType>(eng, src_md, weights_md, bias_md, dst_md, attr)} {
+        const BuildAttrs& attr)
+        : attrs_{attr}
+        , prim_{BuildInnerProductPrim<PrimType>(eng, src_md, weights_md, bias_md, dst_md, attrs_.GetAttrs())} {
     }
 
     InnerProduct(const dnnl::primitive& prim) : prim_(prim) {}
@@ -211,12 +224,14 @@ public:
         auto src_memory = src.GetData(stm, prim_desc.src_desc());
         auto weights_memory = weights.GetData(stm, prim_desc.weights_desc());
         auto bias_memory = bias.GetData(stm, prim_desc.bias_desc());
-        prim_.execute(stm, {
+        auto args = attrs_.GetArgs();
+        args.insert({
             { DNNL_ARG_SRC, src_memory },
             { DNNL_ARG_WEIGHTS, weights_memory },
             { DNNL_ARG_BIAS, bias_memory },
             { DNNL_ARG_DST, dst_memory },
             { DNNL_ARG_SCRATCHPAD, scratchpad } });
+        prim_.execute(stm, args);
         // FIXME(rfsaliev) have to wait due to lifetime of x_memory variables
         stm.wait();
     }
@@ -230,12 +245,13 @@ public:
         auto src_memory = src.GetData(stm, prim_desc.src_desc());
         auto weights_memory = weights.GetData(stm, prim_desc.weights_desc());
 
-        std::unordered_map<int, dnnl::memory> args = {
+        auto args = attrs_.GetArgs();
+        args.insert({
             {DNNL_ARG_SRC, src_memory},
             {DNNL_ARG_WEIGHTS, weights_memory},
             {DNNL_ARG_DST, dst_memory},
             {DNNL_ARG_SCRATCHPAD, scratchpad}
-        };
+        });
 
         // (krzychut)
         // Due to https://github.com/oneapi-src/oneDNN/issues/1337,
@@ -272,6 +288,7 @@ public:
     }
 
 private:
+    BuildAttrs attrs_;
     dnnl::primitive prim_;
 };
 
@@ -328,7 +345,7 @@ InnerProductDims MakeInnerProductDims<dnnl::convolution_forward>(dnnl::memory::d
 
 inline dnnl::memory::desc ConvertIPDataDims(const dnnl::memory::desc& md, size_t dims_num) {
     // to be synchronized with MakeInnerProductDims<dnnl::convolution_forward>()
-    const auto src_dims = md.dims();
+    const auto src_dims = md.get_dims();
     const auto src_dims_num = src_dims.size();
 
     if (src_dims_num == dims_num) {
@@ -349,7 +366,7 @@ template <class PrimType = dnnl::inner_product_forward>
 InnerProduct<PrimType> MakeInnerProduct(const dnnl::engine& eng, int batch, int m, int n, int k, 
                         dnnl::memory::data_type src_dt, dnnl::memory::data_type weights_dt,
                         dnnl::memory::data_type bias_dt, dnnl::memory::data_type dst_dt,
-                        const dnnl::primitive_attr& attr = {}) {
+                        const BuildAttrs& attr = {}) {
     const auto dims = MakeInnerProductDims<PrimType>(batch, m, n, k);
 
     const auto src_md     = dnnl::memory::desc(dims.src_tz , src_dt, dims.src_fmt);
@@ -367,12 +384,18 @@ public:
     SoftMax(const dnnl::engine& eng,
         const dnnl::memory::desc& data_md,
         int axis,
-        const dnnl::primitive_attr& attr = {})
-        : prim_{
+        const BuildAttrs& attr = {})
+        : attrs_{attr}
+        , prim_{
             dnnl::softmax_forward::primitive_desc{
-                dnnl::softmax_forward::desc{dnnl::prop_kind::forward_inference, data_md, axis},
-                attr,
-                eng}} {}
+                eng,
+                dnnl::prop_kind::forward_inference,
+                dnnl::algorithm::softmax_accurate,
+                data_md,
+                data_md,
+                axis,
+                attrs_.GetAttrs()
+                }} {}
 
     SoftMax(const dnnl::primitive& prim) : prim_(prim) {}
 
@@ -381,9 +404,11 @@ public:
         assert(prim_desc.dst_desc() == dst_memory.get_desc());
 
         auto src_memory = src.GetData(stm, prim_desc.src_desc());
-        prim_.execute(stm, {
+        auto args = attrs_.GetArgs();
+        args.insert({
             { DNNL_ARG_SRC, src_memory },
             { DNNL_ARG_DST, dst_memory } });
+        prim_.execute(stm, args);
         // FIXME(rfsaliev) have to wait due to lifetime of x_memory variables
         stm.wait();
     }
@@ -398,12 +423,13 @@ public:
     }
 
 private:
+    BuildAttrs attrs_;
     dnnl::primitive prim_;
 };
 
 inline SoftMax MakeSoftmax(const dnnl::engine& eng, int batch, int m, int n,
                           dnnl::memory::data_type src_dt, int axis,
-                          const dnnl::primitive_attr& attr = {}) {
+                          const BuildAttrs& attr = {}) {
     const dnnl::memory::dims data_tz = {batch, m, n};
 
     const auto data_md = dnnl::memory::desc(data_tz, src_dt, dnnl::memory::dims{});
@@ -412,7 +438,7 @@ inline SoftMax MakeSoftmax(const dnnl::engine& eng, int batch, int m, int n,
 }
 
 template <typename T_data>
-SoftMax MakeSoftmax(const dnnl::engine& eng, int batch, int m, int n, int axis, const dnnl::primitive_attr& attr = {}) {
+SoftMax MakeSoftmax(const dnnl::engine& eng, int batch, int m, int n, int axis, const BuildAttrs& attr = {}) {
     const auto data_dt = DnnlDataType<T_data>::value;
     return MakeSoftmax(eng, batch, m, n, data_dt, axis, attr);
 }
@@ -425,9 +451,10 @@ public:
     LayerNorm(const dnnl::engine& eng,
         const dnnl::memory::desc& data_md, float epsilon,
         dnnl::normalization_flags flags = dnnl::normalization_flags::use_scale | dnnl::normalization_flags::use_shift,
-        const dnnl::primitive_attr& attr = {})
-        : prim_{dnnl::layer_normalization_forward::primitive_desc{
-            dnnl::layer_normalization_forward::desc{dnnl::prop_kind::forward_inference, data_md, epsilon, flags}, attr, eng}} {
+        const BuildAttrs& attr = {})
+        : attrs_{attr}
+        , prim_{dnnl::layer_normalization_forward::primitive_desc{
+            eng, dnnl::prop_kind::forward_inference, data_md, data_md, epsilon, flags, attrs_.GetAttrs()}} {
     }
 
     LayerNorm(const dnnl::primitive& prim) : prim_(prim) {}
@@ -439,15 +466,17 @@ public:
         const auto src_md = prim_desc.src_desc();
         auto src_memory = src.GetData(stm, src_md);
 
-        const auto scaleshift_md = dnnl::memory::desc{{1, src_md.dims().at(1)}, dnnl::memory::data_type::f32, dnnl::memory::dims{}};
+        const auto scaleshift_md = dnnl::memory::desc{{1, src_md.get_dims().at(1)}, dnnl::memory::data_type::f32, dnnl::memory::dims{}};
         auto scale_memory = scale.GetData(stm, scaleshift_md);
         auto shift_memory = shift.GetData(stm, scaleshift_md);
 
-        prim_.execute(stm, {
+        auto args = attrs_.GetArgs();
+        args.insert({
             { DNNL_ARG_SRC, src_memory },
             { DNNL_ARG_SCALE, scale_memory },
             { DNNL_ARG_SHIFT, shift_memory },
             { DNNL_ARG_DST, dst_memory } });
+        prim_.execute(stm, args);
         // FIXME(rfsaliev) have to wait due to lifetime of x_memory variables
         stm.wait();
     }
@@ -462,13 +491,14 @@ public:
     }
 
 private:
+    BuildAttrs attrs_;
     dnnl::primitive prim_;
 };
 
 inline LayerNorm MakeLayerNorm(const dnnl::engine& eng, int batch, int m, int n,
                         dnnl::memory::data_type data_dt, float epsilon,
                         dnnl::normalization_flags flags = dnnl::normalization_flags::use_scale | dnnl::normalization_flags::use_shift,
-                        const dnnl::primitive_attr& attr = {}) {
+                        const BuildAttrs& attr = {}) {
     const dnnl::memory::dims data_tz = {batch, m, n};
 
     const auto data_md     = dnnl::memory::desc(data_tz, data_dt, dnnl::memory::dims{});
@@ -479,7 +509,7 @@ inline LayerNorm MakeLayerNorm(const dnnl::engine& eng, int batch, int m, int n,
 template <typename T_data>
 LayerNorm MakeLayerNorm(const dnnl::engine& eng, int batch, int m, int n, float epsilon,
                  dnnl::normalization_flags flags = dnnl::normalization_flags::use_scale | dnnl::normalization_flags::use_shift,
-                 const dnnl::primitive_attr& attr = {}) {
+                 const BuildAttrs& attr = {}) {
     const auto data_dt = DnnlDataType<T_data>::value;
     return MakeLayerNorm(eng, batch, m, n, data_dt, epsilon, flags, attr);
 }

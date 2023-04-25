@@ -491,16 +491,15 @@ private:
     void TransformInputMask(dnnl::memory& src_mem)
     {
             // We reorder the special-layout memory into a neatly packed and aligned buffer in this->input_mask.
-            // The mask transformation of 'y = -10000 * (1 - x)' can be written as 'y = 10000 * x - 10000',
-            // we do the '10000 * x' here using a post-op. 
-            InputMaskReorder(src_mem).execute(ctx->dnnl_context.getEngineStream(), src_mem, InputMask());
+            InputMaskReorder(src_mem).execute(ctx->dnnl_context.getEngineStream(), {
+                {DNNL_ARG_FROM, src_mem},
+                {DNNL_ARG_TO, InputMask()}
+            });
 
-            // Finally, we shift the result by -10000.
-            InputMaskBinary().execute(ctx->dnnl_context.getEngineStream(), 
-            {
-                {DNNL_ARG_SRC_0, InputMask()},
-                {DNNL_ARG_SRC_1, input_mask_binary_src_1_mem},
-                {DNNL_ARG_DST, InputMask()}
+            // The mask transformation of 'y = -10000 * (1 - x)' can be written as 'y = 10000 * x - 10000',
+            InputMaskEltwise().execute(ctx->dnnl_context.getEngineStream(), {
+                {DNNL_ARG_SRC, InputMask()},
+                {DNNL_ARG_DST, InputMask()},
             });
 
             ctx->dnnl_context.getEngineStream().wait();
@@ -521,7 +520,7 @@ private:
         ThrowIfContextNotInitialized();
         if (!input_mask_reorder)
         {
-            input_mask_reorder = dnnl::reorder{src_mem, InputMask(), dnnl_wrappers::BuildAttrs().Scale(10000.f)};
+            input_mask_reorder = dnnl::reorder{src_mem, InputMask()};
         }
         else
         {
@@ -537,21 +536,22 @@ private:
         return input_mask_reorder;
     }
 
-    dnnl::binary& InputMaskBinary()
-    {
+    dnnl::eltwise_forward& InputMaskEltwise() {
         ThrowIfContextNotInitialized();
-        if(!input_mask_binary)
-        {
-            input_mask_binary_src_1_mem = dnnl::memory{dnnl::memory::desc{{1, 1}, dt::f32, dims{}}, ctx->dnnl_context.getEngine()};
-            // Not pretty, but avoids attaching the memory to an external data buffer.
-            *static_cast<float*>(input_mask_binary_src_1_mem.get_data_handle()) = -10000.f;
-            dnnl::binary::desc binary_d{dnnl::algorithm::binary_add, InputMask().get_desc(), input_mask_binary_src_1_mem.get_desc(),
-                                        InputMask().get_desc()};
-
-            dnnl::binary::primitive_desc binary_pd{binary_d, ctx->dnnl_context.getEngine()};
-            input_mask_binary = dnnl::binary{binary_pd};
+        if (!input_mask_eltwise) {
+            input_mask_eltwise = dnnl::eltwise_forward{
+                dnnl::eltwise_forward::primitive_desc{
+                    ctx->dnnl_context.getEngine(),
+                    dnnl::prop_kind::forward_inference,
+                    dnnl::algorithm::eltwise_linear,
+                    InputMask().get_desc(),
+                    InputMask().get_desc(),
+                    10000.f,
+                    -10000.f
+                }
+            };
         }
-        return input_mask_binary;
+        return input_mask_eltwise;
     }
 
 
@@ -576,8 +576,7 @@ private:
 
     dnnl::memory input_mask;
     dnnl::reorder input_mask_reorder;
-    dnnl::memory input_mask_binary_src_1_mem;
-    dnnl::binary input_mask_binary;
+    dnnl::eltwise_forward input_mask_eltwise;
 };
 
 

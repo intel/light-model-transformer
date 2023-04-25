@@ -59,8 +59,8 @@ RUN wget -O- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRO
 SHELL ["/bin/bash", "-c"]
 
 WORKDIR /oneapi_src
-ARG DNNL_BRANCH=rls-v2.7
-RUN git clone --depth 10 --branch $DNNL_BRANCH https://github.com/oneapi-src/oneDNN.git oneDNN
+ARG DNNL_BRANCH=rls-v3.1
+RUN git clone --depth 1 --branch $DNNL_BRANCH https://github.com/oneapi-src/oneDNN.git oneDNN
 RUN git config --global http.proxy $http_proxy
 WORKDIR /oneapi_src/build
 RUN source /opt/intel/oneapi/setvars.sh intel64 && \

@@ -33,6 +33,14 @@ template <> struct DnnlDataType<uint8_t> {
     static constexpr dnnl::memory::data_type value = dnnl::memory::data_type::u8;
 };
 
+template <> struct DnnlDataType<int32_t> {
+    static constexpr dnnl::memory::data_type value = dnnl::memory::data_type::s32;
+};
+
+template <> struct DnnlDataType<double> {
+    static constexpr dnnl::memory::data_type value = dnnl::memory::data_type::f64;
+};
+
 // TODO(rfsaliev) Replace MemoryAccessor with dnnl::reorder functionality to read-write dnnl::memory
 template <class T>
 class MemoryAccessor {

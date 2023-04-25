@@ -31,6 +31,13 @@
 class BertLayer
 {
     using InnerProductPrimT = dnnl::convolution_forward;
+
+    static dnnl::memory::data_type DataQuantizationType(const std::shared_ptr<BertContext>& ctx) {
+        return dnnl_wrappers::AsymQuantizationSupported<InnerProductPrimT>()
+            ? ctx->UnsignedQuantizationType()
+            : ctx->SignedQuantizationType();
+    }
+
     using dt = dnnl::memory::data_type;
 
     struct OpDataTypes {
@@ -95,7 +102,7 @@ public:
     // ctx->intermediateSize 3072 feed-forward/filter size dimension 4*ctx->hiddenSize 
     BertLayer(const std::shared_ptr<BertContext> &_ctx)
     : ctx{_ctx}
-    , intermediateBufType{ctx->UnsignedQuantizationType()} {
+    , intermediateBufType{DataQuantizationType(ctx)} {
     }
 
     ~BertLayer() {}
@@ -113,9 +120,9 @@ public:
         quant_factors_ = _quant_factors;
 
         // Default operation types
-        const auto src_type    = ctx->UnsignedQuantizationType();
+        const auto src_type    = DataQuantizationType(ctx);
         const auto weight_type = ctx->SignedQuantizationType();
-        const auto bias_type   = ctx->use_quantization ? dt::s32 : ctx->FloatType();
+        const auto bias_type   = ctx->FloatType();
         const auto dst_type    = ctx->FloatType();
         const auto op_data_types = OpDataTypes{src_type, weight_type, bias_type, dst_type};
 
@@ -133,7 +140,7 @@ public:
 
         // Softmax construction
         const auto qk_result_md = batchMatMul1ScaleBias_->dst_desc();
-        const int axis = qk_result_md.dims().size() - 1;
+        const int axis = qk_result_md.get_dims().size() - 1;
         softmax_ = std::make_unique<SoftMax>(eng, qk_result_md, axis);
 
         // At first, construct att out to use src_desc in batchMatMul2
@@ -152,9 +159,9 @@ public:
 
         // Norm1
         const auto gamma1_mem = ReshapeMemory(_gamma1, {1, ctx->hiddenSize});
-        gamma1 = DataSource(gamma1_mem);
+        gamma1 = ImmutableDataSource(gamma1_mem);
         const auto beta1_mem = ReshapeMemory(_beta1, {1, ctx->hiddenSize});
-        beta1 = DataSource(beta1_mem);
+        beta1 = ImmutableDataSource(beta1_mem);
 
         auto ln1_md = ConvertIPDataDims(attentionOutIPDesc.prim->PrimDesc().dst_desc(), 2);
         const float epsilon = 9.999999960041972e-13;
@@ -170,7 +177,7 @@ public:
 
         // Force float output MatMul if scaling less than accuracy factor
         const auto output_SrcScale = computeQuantizationScale(intermediateBufType, quant_factors_.output.min, quant_factors_.output.max);
-        if (output_SrcScale < outputQuantizationAccuracyFactor) {
+        if (output_SrcScale > 1.f / outputQuantizationAccuracyFactor) {
             intermediateBufType = outputWeightType = outputBiasType = ctx->FloatType();
         }
 
@@ -189,11 +196,11 @@ public:
 
         // Apply source quantization scale of the Output MatMul to Intermediate MatMul result
         using algo = dnnl::algorithm;
-        auto intermediateAttrs = BuildAttrs().Eltwise(algo::eltwise_gelu, 0.f, 0.f, outputIPDesc.scale);
+        auto intermediateAttrs = BuildAttrs()
+                                    .Eltwise(algo::eltwise_gelu_tanh)
+                                    .Scale(outputIPDesc.scale, DNNL_ARG_DST)
+                                    .ZeroPoint(outputIPDesc.shift, DNNL_ARG_DST);
 
-        if (outputIPDesc.shift != 0.f) {
-            intermediateAttrs.Eltwise(algo::eltwise_linear, 1.f, outputIPDesc.shift);
-        }
 
         // intermediate weight and bias
         m = ctx->maxTokenSize; // A.Rows();
@@ -207,9 +214,9 @@ public:
 
         // Output Norm
         const auto gamma2_mem = ReshapeMemory(_gamma2, {1, ctx->hiddenSize});
-        gamma2 = DataSource(gamma2_mem);
+        gamma2 = ImmutableDataSource(gamma2_mem);
         const auto beta2_mem = ReshapeMemory(_beta2, {1, ctx->hiddenSize});
-        beta2 = DataSource(beta2_mem);
+        beta2 = ImmutableDataSource(beta2_mem);
 
         auto ln2_md = ConvertIPDataDims(outputIPDesc.prim->PrimDesc().dst_desc(), 2);
         Norm2_ = std::make_unique<LayerNorm>(eng, ln2_md, epsilon, flags);
@@ -310,25 +317,22 @@ public:
     }
 
     dnnl::memory PrepareInput(const dnnl::memory& input) const {
-        // TODO(rfsaliev) replace with dnnl::memory::desc::ndims() in oneDNN v3
-        auto ndims = [](const dnnl::memory::desc& md) { return md.data.ndims; };
-
         auto result_md = ResultMD();
         auto input_md = input.get_desc();
         if (result_md == input_md) {
             return input;
         }
 
-        assert((input_md.dims() == dnnl::memory::dims{ctx->batch_ * ctx->maxTokenSize, ctx->hiddenSize}
-             || input_md.dims() == dnnl::memory::dims{ctx->batch_,  ctx->maxTokenSize, ctx->hiddenSize}));
+        assert((input_md.get_dims() == dnnl::memory::dims{ctx->batch_ * ctx->maxTokenSize, ctx->hiddenSize}
+             || input_md.get_dims() == dnnl::memory::dims{ctx->batch_,  ctx->maxTokenSize, ctx->hiddenSize}));
 
         // join batch and maxTokenSize dimensions
-        auto reshaped_input_md = ndims(input_md) == 2
+        auto reshaped_input_md = input_md.get_ndims() == 2
                                  ? input_md
                                  : input_md.reshape({static_cast<dnnl::memory::dim>(ctx->batch_) * ctx->maxTokenSize, ctx->hiddenSize});
         // reinterpret to match result_md dimensions
         using namespace dnnl_wrappers;
-        reshaped_input_md = ConvertIPDataDims(reshaped_input_md, result_md.data.ndims);
+        reshaped_input_md = ConvertIPDataDims(reshaped_input_md, result_md.get_ndims());
         auto reshaped_input = ReLayoutMemory(input, reshaped_input_md);
 
         if (reshaped_input_md == result_md)
@@ -343,9 +347,6 @@ public:
     }
 
     void ProcessResult(dnnl::memory& result, dnnl::memory& output) const {
-        // TODO(rfsaliev) replace with dnnl::memory::desc::ndims() in oneDNN v3
-        auto ndims = [](const dnnl::memory::desc& md) { return md.data.ndims; };
-
         assert(result.get_desc() == ResultMD());
         if (result.get_data_handle() == output.get_data_handle())
             return;
@@ -353,16 +354,16 @@ public:
         auto result_md = result.get_desc();
         auto output_md = output.get_desc();
 
-        assert((output_md.dims() == dnnl::memory::dims{ctx->batch_ * ctx->maxTokenSize, ctx->hiddenSize}
-             || output_md.dims() == dnnl::memory::dims{ctx->batch_,  ctx->maxTokenSize, ctx->hiddenSize}));
+        assert((output_md.get_dims() == dnnl::memory::dims{ctx->batch_ * ctx->maxTokenSize, ctx->hiddenSize}
+             || output_md.get_dims() == dnnl::memory::dims{ctx->batch_,  ctx->maxTokenSize, ctx->hiddenSize}));
 
         // join batch and maxTokenSize dimensions
-        auto reshaped_output_md = ndims(output_md) == 2 
+        auto reshaped_output_md = output_md.get_ndims() == 2 
                                 ? output_md
                                 : output_md.reshape({static_cast<dnnl::memory::dim>(ctx->batch_) * ctx->maxTokenSize, ctx->hiddenSize});
         // reinterpret to match result_md dimensions
         using namespace dnnl_wrappers;
-        auto reshaped_output = ReLayoutMemory(output, ConvertIPDataDims(reshaped_output_md, result_md.data.ndims));
+        auto reshaped_output = ReLayoutMemory(output, ConvertIPDataDims(reshaped_output_md, result_md.get_ndims()));
 
         auto& stm = ctx->dnnl_context.getEngineStream();
         dnnl::reorder{result, reshaped_output}.execute(stm, result, reshaped_output);
@@ -370,59 +371,12 @@ public:
     }
 
 private:
-    // Shift bias for source zero-point case with formula:
-    // let: weight[N, K], bias[N]
-    // bias[n] -= reduce_sum(weight, K)[n] * zero_point
-    static dnnl::memory shiftBias(const std::shared_ptr<BertContext>& ctx,
-                                  const dnnl::memory::dims& weight_dims,
-                                  dnnl_wrappers::DataSource& weight,
-                                  dnnl_wrappers::DataSource& bias,
-                                  float zero_point) {
-        using namespace dnnl_wrappers;
-        using reduce = dnnl::reduction;
-        using algo = dnnl::algorithm;
-        using dt = dnnl::memory::data_type;
-
-        const auto weight_quant_type = ctx->SignedQuantizationType();
-        auto& stm = ctx->dnnl_context.getEngineStream();
-
-        if (zero_point == 0.f || weight_quant_type == ctx->FloatType()) {
-            return bias.GetData(stm, {{weight_dims[0]}, ctx->FloatType(), dnnl::memory::dims{}});
-        }
-
-        auto src = weight.GetData(stm, {weight_dims, weight_quant_type, dnnl::memory::dims{}});
-
-        auto bias_mem = bias.GetData(stm, {{weight_dims[0]}, dt::s32, dnnl::memory::dims{}});
-        auto dst_dims = weight_dims;
-        std::fill(dst_dims.begin() + 1, dst_dims.end(), 1);
-        auto dst = ReshapeMemory(bias_mem, dst_dims);
-
-        reduce prim{
-            reduce::primitive_desc{
-                reduce::desc{algo::reduction_sum, src.get_desc(), dst.get_desc(), 0.f, 0.f},
-                BuildAttrs().Eltwise(algo::eltwise_linear, -zero_point).Sum(),
-                ctx->dnnl_context.getEngine()
-            }
-        };
-
-        prim.execute(
-            stm,
-            {
-                {DNNL_ARG_SRC, src},
-                {DNNL_ARG_DST, dst},
-            }
-        );
-        stm.wait();
-
-        return bias_mem;
-    }
-
     struct InnerProductInferenceDesc {
         dnnl_wrappers::CachedDataSource weight;
         dnnl_wrappers::CachedDataSource bias;
         std::unique_ptr<dnnl_wrappers::InnerProduct<InnerProductPrimT>> prim;
-        float scale = 1.f;
-        float shift = 0.f;
+        dnnl::memory scale;
+        dnnl::memory shift;
         // dnnl::memory is actually shared pointer to a buffer
         // there is the chance that context will change underlying buffer for scratchpad space
         // so let's store a pointer to context's scratchpad memory field rather than copy underlying buffer
@@ -459,19 +413,20 @@ private:
                                                 const dnnl::memory& bias,
                                                 dnnl_wrappers::BuildAttrs attrs = {}) {
             using namespace dnnl_wrappers;
-            InnerProductInferenceDesc ipConfig;
-
-            ipConfig.scale = computeQuantizationScale(data_types.src_dt, min_max.min, min_max.max);
-            // TODO(rfsaliev) std::round(), std::ceil() or std::floor()?
-            ipConfig.shift = (data_types.src_dt == dnnl::memory::data_type::u8)
-                ? std::round(-min_max.min * ipConfig.scale)
-                : 0.f;
-
             auto& eng = ctx->dnnl_context.getEngine();
+            auto& stm = ctx->dnnl_context.getEngineStream();
+
+            InnerProductInferenceDesc ipConfig;
+            const auto scale_val = computeQuantizationScale(data_types.src_dt, min_max.min, min_max.max);
+            if (scale_val != BuildAttrs::noScale) {
+                ipConfig.scale = ToMemory(eng, stm, scale_val);
+            }
+            // TODO(rfsaliev) std::round(), std::ceil() or std::floor()?
+            if (data_types.src_dt == dnnl::memory::data_type::u8) {
+                ipConfig.shift = ToMemory(eng, stm, static_cast<int32_t>(std::round(-min_max.min / scale_val)));
+            }
 
             const auto weight_scale = computeQuantizationScale(data_types.weight_dt, weight, ctx->dnnl_context.getEngineStream());
-            const auto bias_scale = ipConfig.scale * weight_scale;
-            const auto dst_scale = 1.f / bias_scale;
 
             // Note(rfsaliev): InnerProduct expects memory format 'OI' which is transposition to Matmul 'KN'
             // Note(krzychut): The AttachMemory call is only safe if the lifetime of the buffer can be guaranteed
@@ -489,13 +444,19 @@ private:
             const auto weight_mem = ReLayoutMemory(weight, dnnl::memory::desc{dims.weights_tz, dt::f32, w_fmt});
             const auto bias_mem = ReshapeMemory(bias, dims.bias_tz);
 
-            ipConfig.weight = ScaledCachedData(weight_mem, weight_scale);
-            auto scaled_bias = ScaledData(bias_mem, bias_scale);
-            ipConfig.bias = CachedDataSource(shiftBias(ctx, dims.weights_tz, ipConfig.weight, scaled_bias, ipConfig.shift));
+            const auto weight_scale_mem = weight_scale != BuildAttrs::noScale
+                                            ? ToMemory(eng, stm, weight_scale)
+                                            : dnnl::memory{};
+            ipConfig.weight = ScaledCachedData(weight_mem, weight_scale_mem);
+
+            ipConfig.bias = CachedDataSource(bias_mem);
+
+            attrs.Scale(ipConfig.scale, DNNL_ARG_SRC).ZeroPoint(ipConfig.shift, DNNL_ARG_SRC)
+                 .Scale(weight_scale_mem, DNNL_ARG_WEIGHTS);
 
             ipConfig.prim   = std::make_unique<InnerProduct<InnerProductPrimT>>(MakeInnerProduct<InnerProductPrimT>(
                                        eng, ctx->batch_, m, n, k, data_types.src_dt, data_types.weight_dt,
-                                       data_types.bias_dt, data_types.dst_dt, attrs.Scale(dst_scale).ScratchpadModeUser()));
+                                       data_types.bias_dt, data_types.dst_dt, attrs.ScratchpadModeUser()));
 
             ipConfig.scratchpad = ctx->AllocateScratchpad(ipConfig.prim->PrimDesc().scratchpad_desc());
 
@@ -525,24 +486,24 @@ private:
             if (joinQKV()) {
 
                 qkvWeight = joinData({k, n}, {_queryWeight, _keyWeight, _valueWeight});
-                assert(qkvWeight.get_desc().dims() == (dnnl::memory::dims{k, n*3}));
+                assert(qkvWeight.get_desc().get_dims() == (dnnl::memory::dims{k, n*3}));
 
                 qkvBias = joinData({n}, {_queryBias, _keyBias, _valueBias});
-                assert(qkvBias.get_desc().dims() == (dnnl::memory::dims{n*3}));
+                assert(qkvBias.get_desc().get_dims() == (dnnl::memory::dims{n*3}));
 
                 qkvIPDesc = BertLayer::BuildInnerProduct(ctx, op_data_types, m, n*3, k, qkv_min_max, qkvWeight, qkvBias);
 
                 const auto qkv_dst_md = ConvertIPDataDims(qkvIPDesc.dst_desc(), 2);
-                auto qkv_dims = qkv_dst_md.dims();
+                auto qkv_dims = qkv_dst_md.get_dims();
                 assert(qkv_dims == (dnnl::memory::dims{ctx->batch_ * m, n*3}));
 
                 auto qkv_reshape_md = qkv_dst_md.reshape({qkv_dims[0]/m, qkv_dims[0]/ctx->batch_, 3, qkv_dims[1]/3}).permute_axes({1,2,0,3});
-                qkvResultMD = {qkv_reshape_md.dims(), qkv_reshape_md.data_type(), dnnl::memory::dims{}};
+                qkvResultMD = {qkv_reshape_md.get_dims(), qkv_reshape_md.get_data_type(), dnnl::memory::dims{}};
                 qkvReorder = {dnnl::reorder::primitive_desc{eng, qkv_reshape_md, eng, qkvResultMD}};
 
-                qkv_dims = qkvResultMD.dims();
+                qkv_dims = qkvResultMD.get_dims();
                 qkv_dims[0] = 1;
-                auto qkv_part_md = dnnl::memory::desc{qkv_dims, qkvResultMD.data_type(), dnnl::memory::dims{}}.reshape({qkv_dims[1] * qkv_dims[2], qkv_dims[3]});
+                auto qkv_part_md = dnnl::memory::desc{qkv_dims, qkvResultMD.get_data_type(), dnnl::memory::dims{}}.reshape({qkv_dims[1] * qkv_dims[2], qkv_dims[3]});
 
                 queryMD = keyMD = valueMD = qkv_part_md;
 
@@ -644,10 +605,10 @@ private:
             auto& eng = ctx->dnnl_context.getEngine();
             auto& stm = ctx->dnnl_context.getEngineStream();
 
-            const dnnl::memory::desc md{dims, srcs.at(0).get_desc().data_type(), dnnl::memory::dims{}};
+            const dnnl::memory::desc md{dims, srcs.at(0).get_desc().get_data_type(), dnnl::memory::dims{}};
             std::vector<dnnl::memory::desc> descs(srcs.size(), md);
 
-            dnnl::concat::primitive_desc concat_pd{static_cast<int>(dims.size()-1), descs, eng};
+            dnnl::concat::primitive_desc concat_pd{eng, static_cast<int>(dims.size()-1), descs};
             dnnl::memory result{concat_pd.dst_desc(), eng};
 
             std::unordered_map<int, dnnl::memory> args{{DNNL_ARG_DST, result}};
@@ -712,7 +673,7 @@ private:
                         ctx->dnnl_context.getEngine(),
                         src_md, weights_md, bias_md, dst_md,
                         dnnl_wrappers::BuildAttrs()
-                            .Scale(scale)
+                            .Eltwise(dnnl::algorithm::eltwise_linear, scale)
                             .Binary(dnnl::algorithm::binary_add, mask_md)
                             );
         }
@@ -723,7 +684,7 @@ private:
             auto QData = ImmutableDataSource(ReLayoutMemory(query, src_md));
             auto KData = ImmutableDataSource(ReLayoutMemory(key, weights_md));
             auto MaskData = ImmutableDataSource(ReshapeMemory(input_mask, input_dims));
-            std::unordered_map<int, std::reference_wrapper<DataSource>> post_ops_data = {{0, std::ref(MaskData)}};
+            std::unordered_map<int, std::reference_wrapper<DataSource>> post_ops_data = {{1, std::ref(MaskData)}};
 
             batchMatMul->ComputeWithPostOps(stm, QData, KData, post_ops_data, dst);
         }
@@ -760,7 +721,7 @@ private:
             batchMatMul = std::make_unique<dnnl_wrappers::MatMul>(
                             ctx->dnnl_context.getEngine(),
                             src_md, weights_md, dnnl::memory::desc{}, dst_md,
-                            dnnl::primitive_attr{});
+                            BuildAttrs());
         }
 
         void Compute(dnnl::stream& stm, const dnnl::memory& qk_result, const dnnl::memory& value, dnnl::memory& dst) {

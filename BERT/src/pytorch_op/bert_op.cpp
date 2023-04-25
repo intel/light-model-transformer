@@ -166,7 +166,7 @@ void BertOp::StoreParameters(const std::vector<torch::Tensor>& parameters)
 {
     auto clone_memory = [this](const dnnl::memory& m, const dnnl::memory::desc& md = {}) -> dnnl::memory
     {
-        auto target_md = md ? md : m.get_desc();
+        auto target_md = md.is_zero() ? m.get_desc() : md;
         auto target = dnnl::memory{target_md, context_->dnnl_context.getEngine()};
         auto r = dnnl::reorder{m, target};
         r.execute(context_->dnnl_context.getEngineStream(),
@@ -191,7 +191,7 @@ void BertOp::StoreParameters(const std::vector<torch::Tensor>& parameters)
             // This clone_memory call causes a reorder that physically transposes the 2D parameters.
             // The original BertEncoder uses torch.nn.Linear, which performs `y = x*A^T + b`, so we transpose the `A^T`
             // back to `A` for the BertLayers to consume.
-            auto md = dnnl::memory::desc{m.get_desc().dims(), m.get_desc().data_type(), dnnl::memory::format_tag::ba};
+            auto md = dnnl::memory::desc{m.get_desc().get_dims(), m.get_desc().get_data_type(), dnnl::memory::format_tag::ba};
             parameters_.emplace_back(clone_memory(m, md));
         }
         else

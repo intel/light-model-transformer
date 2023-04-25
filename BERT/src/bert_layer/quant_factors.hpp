@@ -20,7 +20,7 @@ struct MinMax {
         // reorder to plain mem
         auto tensor = [](dnnl::memory src_mem) -> dnnl::memory {
             auto src_md = src_mem.get_desc();
-            dnnl::memory::desc dst_md{src_md.dims(), dnnl::memory::data_type::f32, dnnl::memory::dims{}};
+            dnnl::memory::desc dst_md{src_md.get_dims(), dnnl::memory::data_type::f32, dnnl::memory::dims{}};
             if (dst_md == src_md) {
                 return src_mem;
             }
@@ -33,7 +33,7 @@ struct MinMax {
             return dst_mem;
         }(mem);
 
-        if (tensor.get_desc().data_type() != dnnl::memory::data_type::f32)
+        if (tensor.get_desc().get_data_type() != dnnl::memory::data_type::f32)
         {
             throw std::invalid_argument("MinMax requires tensors for quantization factor calibration to have "
                                         "FP32 data type.");
@@ -122,11 +122,11 @@ float computeQuantizationScale(dnnl::memory::data_type data_type, float min, flo
     switch(data_type)
     {
         case dt::s8:
-            return static_cast<float>(std::numeric_limits<int8_t>::max()) / std::max(std::abs(min), std::abs(max));
+            return std::max(std::abs(min), std::abs(max)) / static_cast<float>(std::numeric_limits<int8_t>::max());
         case dt::u8:
-            return static_cast<float>(std::numeric_limits<uint8_t>::max()) / std::abs(max - min);
+            return                    std::abs(max - min) / static_cast<float>(std::numeric_limits<uint8_t>::max());
         case dt::s32:
-            return static_cast<float>(std::numeric_limits<int32_t>::max()) / std::max(std::abs(min), std::abs(max));
+            return std::max(std::abs(min), std::abs(max)) / static_cast<float>(std::numeric_limits<int32_t>::max());
         default:
             return dnnl_wrappers::BuildAttrs::noScale;
     }
@@ -139,7 +139,7 @@ float computeQuantizationScale(dnnl::memory::data_type data_type, const float* p
 }
 
 float computeQuantizationScale(dnnl::memory::data_type data_type, const dnnl::memory& mem, dnnl::stream wait_stream = dnnl::stream{}) {
-    assert(mem.get_desc().data_type() == dnnl::memory::data_type::f32);
+    assert(mem.get_desc().get_data_type() == dnnl::memory::data_type::f32);
     if (wait_stream) {
         wait_stream.wait();
     }
