@@ -1,5 +1,5 @@
-tensorflow==2.9.0
-protobuf==3.20
+tensorflow
+protobuf
 pandas
 tabulate
 transformers
