@@ -4,7 +4,7 @@ BERT model optimization is an open-source optimization for BERT language process
 The optimization is based on [Bfloat16 Optimization Boosts Alibaba Cloud BERT Model Performance](https://www.intel.com/content/www/us/en/artificial-intelligence/posts/alibaba-blog.html).  
 Furthermore, it utilizes  [Intel® oneAPI Deep Neural Network Library (oneDNN)](https://github.com/oneapi-src/oneDNN) to obtain additional performance gains.  
 BERT model optimization is split into two parts, model modifier, which modifies the model to use a custom operator and a custom operator which utilizes oneDNN.  
-Currently HuggingFace PyTorch BERT model and models built using TensorFlow 1.x and 2.x are supported.
+Currently HuggingFace BERT models (PyTorch and TensorFlow backends) and models built using TensorFlow 1.x and 2.x are supported.
 We provide the way to modify some TensorFLow models from TFhub, google-research/bert and Hugging Face.
 If you wish to modify your custom TensorFlow model, we provide the step by step guide how to do it. Please check our [README](util/README.md) page.
 
@@ -48,10 +48,10 @@ BERT model optimization supports systems meeting the following requirements:
 For the currently supported use cases, short tutorials on usage are provided.
 All of them require built from source the BERT Operator (BertOp), refer to [Building from source](#building-from-source)
 
-* [tensorflow 1.x](tests/tf1_ops_accuracy/README.md)
-* [tensorflow 2.x](tests/tf2_ops_accuracy/README.md) (*Up to TF v.2.9 is supported now*)
-* [tensorflow 2.x without using the model_modifier module](tests/tf2_no_model_modifier/README.md) (only huggingface models are currently supported)
-* [pytorch](tests/pytorch/README.md) (only huggingface models are currently supported)
+* [tensorflow 1.x](tests/tf1_ops_accuracy/README.md) (*Tested on TF v.1.15*)
+* [tensorflow 2.x](tests/tf2_ops_accuracy/README.md) (*Tested on TF v.2.5, v.2.9, v.2.12*)
+* [tensorflow 2.x without using the model_modifier module](tests/tf2_no_model_modifier/README.md) (only HuggingFace models are currently supported)
+* [pytorch](tests/pytorch/README.md) (only HuggingFace models are currently supported)
 * [Model Zoo for Intel® Architecture](tests/model_zoo/README.md)
 
 ## Samples
@@ -60,6 +60,7 @@ There are scripts which demonstrate BertOp integration capabilities:
 
 * [TensorFlow demo](samples/tensorflow_performance/README.md)
 * [PyTorch demo](samples/pytorch_performance/README.md)
+* [TensorFlow demo, no model modifier required](samples/tensorflow_no_model_modifier_performance/README.md)
 
 ## License
 

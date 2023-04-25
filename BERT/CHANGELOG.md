@@ -1,5 +1,13 @@
 # BERT Model Optimization Change Log
 
+## v0.10 - 2023-04
+
+### Added
+
+* Implemented approach to optimize HuggingFace BERT in TensorFlow without usage of [model_modifier](python/model_modifier/).
+  See the appropriate [sample](samples/tensorflow_no_model_modifier_performance/)
+* Changed oneDNN API version support from 2.x to 3.x - oneDNN version <3.0 is not supported anymore
+
 ## v0.9 - 2023-04
 
 ### Added
@@ -7,7 +15,7 @@
 * Completed PyTorch integration. See [tests README](tests/pytorch/README.md) for details
 * TF and PT integration demos. See [samples](samples/) directory
 * Performance optimizations including:
-  * Use oneDNN Inner Product with Convolution 1x1 for linear operations
+  * Use oneDNN Convolution 1x1 for linear operations
   * Optimized infrastructure code
 * Added patterns to modify RoBERTa models. See pattern files [here](util/tf2-hf-roberta/)
 
