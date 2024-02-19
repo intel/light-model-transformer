@@ -74,11 +74,11 @@ private:
 }
 
 void BertOp::Configure(int64_t max_seq_len = 128, int64_t hidden_size = 768, int64_t intermediate_size = 3072, int64_t batch_size = 1,
-                int64_t num_layers = 12, bool use_quantization = false, bool use_bfloat16 = false,
+                int64_t num_layers = 12, int64_t num_att_heads = 12, bool use_quantization = false, bool use_bfloat16 = false,
                 bool calibrate_quant_factors = false)
 {
     context_ = std::make_shared<BertContext>(max_seq_len, hidden_size, intermediate_size, batch_size, num_layers,
-                                                  use_quantization, use_bfloat16, calibrate_quant_factors);
+                                             num_att_heads, use_quantization, use_bfloat16, calibrate_quant_factors);
 
     layers_.reserve(num_layers);
     for(int i = 0; i < num_layers; ++i)

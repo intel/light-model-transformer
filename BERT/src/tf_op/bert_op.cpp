@@ -90,8 +90,8 @@ public:
             OP_REQUIRES_OK(context, context->GetAttr("NumAttentionHeads", &num_attention_heads));
             OP_REQUIRES(context, num_attention_heads > 0, errors::InvalidArgument("NumAttentionHeads must be greater than 0."));
 
-            OP_REQUIRES(context, num_attention_heads * BertContext::head_size == hidden_size,
-                errors::InvalidArgument("Constraint not met: HiddenSize = NumAttentionHead * HeadSize"));
+            OP_REQUIRES(context, hidden_size % num_attention_heads == 0,
+                errors::InvalidArgument("Constraint not met: HiddenSize % NumAttentionHead == 0"));
 
             int layers = num_weights / BertContext::tensors_per_layer;
 

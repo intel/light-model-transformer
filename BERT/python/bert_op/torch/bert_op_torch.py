@@ -16,7 +16,7 @@ class BertEncoderOp(transformers.models.bert.modeling_bert.BertEncoder):
     """
 
     class BertEncoderScriptModule(torch.nn.Module):
-        def __init__(self, max_position_embeddings, hidden_size, intermediate_size, num_hidden_layers,
+        def __init__(self, max_position_embeddings, hidden_size, intermediate_size, num_hidden_layers, num_att_heads,
                      use_quantization, use_bfloat16, quantization_factors, calibrate_quant_factors,
                      params):
             super().__init__()
@@ -26,6 +26,7 @@ class BertEncoderOp(transformers.models.bert.modeling_bert.BertEncoder):
             self.hidden_size = hidden_size
             self.intermediate_size = intermediate_size
             self.num_hidden_layers = num_hidden_layers
+            self.num_att_heads = num_att_heads
             self.use_quantization = use_quantization
             self.use_bfloat16 = use_bfloat16
             # Convert from numpy array to list, to make it work with torchscript
@@ -44,6 +45,7 @@ class BertEncoderOp(transformers.models.bert.modeling_bert.BertEncoder):
                                        self.intermediate_size,
                                        batch_size,
                                        self.num_hidden_layers,
+                                       self.num_att_heads,
                                        self.use_quantization, self.use_bfloat16, self.calibrate_quant_factors)
                 self.bert_op.initialize(self.params, self.quantization_factors)
                 self._initialized = True
@@ -70,6 +72,7 @@ class BertEncoderOp(transformers.models.bert.modeling_bert.BertEncoder):
             self.config.hidden_size,
             self.config.intermediate_size,
             self.config.num_hidden_layers,
+            self.config.num_attention_heads,
             self.config.use_quantization, self.config.use_bfloat16, self.config.quantization_factors,
             self.config.calibrate_quant_factors,
             [*self.parameters()])

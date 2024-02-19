@@ -116,7 +116,7 @@ void benchmark(float *input, const Config& config)
 {
   using dt = dnnl::memory::data_type;
 
-  auto ctx = std::make_shared<BertContext>(config.maxTokenSize, config.hiddenSize, config.intermediateSize, config.batch, config.layers, config.do_quant, config.do_bf16);
+  auto ctx = std::make_shared<BertContext>(config.maxTokenSize, config.hiddenSize, config.intermediateSize, config.batch, config.layers, config.attentionHeadNum, config.do_quant, config.do_bf16);
   std::vector<std::unique_ptr<BertLayer>> bert_layers(config.layers);
   std::vector<QuantizationFactors> quant_factors;
   if (config.layers == 12) {
