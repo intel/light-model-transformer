@@ -23,27 +23,23 @@ class BertContext : public std::enable_shared_from_this<BertContext> {
 
 public:
 
-    // All BERT models use same head size - 64
-    // * Base: hiddenSize = 768, heads = 12
-    // * Large: hiddenSize = 1024, heads = 16
-    // TODO(rfsaliev) review correlation with the 'NumAttentionHeads' attribute
-    static constexpr int head_size = 64;
     static constexpr int tensors_per_layer = 16;
 
     BertContext(int maxTokenSize = 128, int hiddenSize = 768, int intermediateSize = 3072, int batch = 1,
-                int numLayers = 12, bool use_quantization = false, bool use_bfloat16 = false, bool calibrate_quant_factors = false)
+                int numLayers = 12, int numHeads = 12, bool use_quantization = false, bool use_bfloat16 = false,
+                bool calibrate_quant_factors = false)
         : maxTokenSize{maxTokenSize}
         , hiddenSize{hiddenSize}
         , intermediateSize{intermediateSize}
         , batch_{batch}
         , numLayers{numLayers}
-        , numHeads{hiddenSize / head_size}
+        , numHeads{numHeads}
         , use_quantization{use_quantization}
         , use_bfloat16{use_bfloat16}
         , calibrate_quant_factors{calibrate_quant_factors}
         , scratchpadBuffer_{std::make_shared<dnnl::memory>()}
     {
-        assert(hiddenSize % head_size == 0);
+        assert(hiddenSize % numHeads == 0);
     }
 
     dnnl::memory::data_type   SignedQuantizationType() const { return use_quantization ? dt::s8 : FloatType(); }
@@ -158,7 +154,7 @@ public:
 
     std::shared_ptr<BertContext> Build() {
         return std::make_shared<BertContext>(max_token_size, hidden_size, intermediate_size, batch_size, num_layers,
-                                             use_quantization, use_bfloat16, calibrate_quant_factors);
+                                             num_attention_heads, use_quantization, use_bfloat16, calibrate_quant_factors);
     }
 
     void MaxTokenSize(int max_token_size) { this->max_token_size = max_token_size; }

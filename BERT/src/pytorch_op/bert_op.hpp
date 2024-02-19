@@ -24,7 +24,8 @@ class BertOp : public torch::CustomClassHolder {
 
 public:
     void Configure(int64_t max_seq_len, int64_t hidden_size, int64_t intermediate_size, int64_t batch_size,
-                   int64_t num_layers, bool use_quantization, bool use_bfloat16, bool calibrate_quant_factors);
+                   int64_t num_layers, int64_t num_att_heads, bool use_quantization, bool use_bfloat16,
+                   bool calibrate_quant_factors);
 
     std::vector<double> GetQuantizationFactors() const;
 
