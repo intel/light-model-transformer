@@ -30,7 +30,7 @@
 
 class BertLayer
 {
-    using InnerProductPrimT = dnnl::convolution_forward;
+    using InnerProductPrimT = dnnl::inner_product_forward;
 
     static dnnl::memory::data_type DataQuantizationType(const std::shared_ptr<BertContext>& ctx) {
         return dnnl_wrappers::AsymQuantizationSupported<InnerProductPrimT>()
