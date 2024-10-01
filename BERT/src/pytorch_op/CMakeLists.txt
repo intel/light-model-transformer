@@ -21,10 +21,6 @@ include_directories(
 
 add_library(${TARGET} SHARED ${SOURCES})
 
-# set_target_properties(${TARGET} PROPERTIES
-#     CXX_STANDARD_REQUIRED TRUE
-#     CXX_STANDARD 14)
-
 target_link_libraries(${TARGET} PUBLIC BertLayer)
 
 target_link_libraries(${TARGET} PUBLIC DNNL::dnnl)
